@@ -6,6 +6,8 @@
 *.dylib
 grengate
 grengate_v*
+config.json
+
 
 # Sublime configs
 sftp-config.json

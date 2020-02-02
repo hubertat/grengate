@@ -6,17 +6,16 @@ import (
 	"net/http"
 	// "net/url"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"bytes"
 	"io/ioutil"
-)
 
-// type CluLight struct {
-// 	Id    string
-// 	Clu   string
-// 	State int
-// }
+    "github.com/brutella/hc"
+    "github.com/brutella/hc/accessory"
+)
 
 type ReqLight struct {
 	Clu 	string		`json:"clu"`
@@ -26,42 +25,159 @@ type ReqLight struct {
 }
 
 type GrentonLight struct {
-	Id    	string
-	CluId	string
+	Id    	uint32
+	Name 	string
 	State 	bool
-	Block	sync.Mutex
+	Kind	string
+
+	clu		*GrentonClu
+	block	sync.Mutex
+
+	HkAcc	*accessory.Lightbulb
 }
 
-// func (gl *GrentonLight) GetCluLight() CluLight {
-// 	return CluLight{
-// 		Id:  gl.Id,
-// 		Clu: gl.CluId,
-// 	}
-// }
+func (gl *GrentonLight) GetLongId() uint64 {
+	return (uint64(gl.clu.GetIntId()) << 32) + uint64(gl.Id)
+}
+
+func (gl *GrentonLight) GetFullName() string {
+	return fmt.Sprintf("%s%4d", gl.Kind, gl.Id)
+}
+
+func (gl *GrentonLight) GetMixedId() string {
+	return fmt.Sprintf("%s%4d", gl.Kind, gl.Id)
+}
+
 func (gl *GrentonLight) GetReqLight() ReqLight {
 	return ReqLight{
-		Dout:  gl.Id,
-		Clu: gl.CluId,
+		Dout:  gl.GetMixedId(),
+		Clu: gl.clu.GetMixedId(),
 	}
 }
 
+func (gl *GrentonLight) AppendHk() *accessory.Lightbulb {
+	info := accessory.Info{
+		Name: gl.Name,
+		SerialNumber: fmt.Sprintf("%d", gl.Id),
+		Manufacturer: "Grenton",
+		Model: gl.Kind,
+		ID: gl.GetLongId(),
+	}
+	
+	gl.HkAcc = accessory.NewLightbulb(info)
+	gl.HkAcc.Lightbulb.On.OnValueRemoteUpdate(gl.Set)
+	gl.HkAcc.Lightbulb.On.OnValueRemoteGet(gl.Get)
+	log.Printf("HK Lightbulb added (id: %x, type: %d", gl.HkAcc.Accessory.ID, gl.HkAcc.Accessory.Type)
+	return gl.HkAcc
+}
+
+func (gl *GrentonLight) Get() bool {
+	if gl.clu.grentonSet.CheckFreshness() {
+		return gl.State
+	} 
+
+	gl.clu.grentonSet.Refresh()
+
+	for {
+		if gl.clu.grentonSet.CheckFreshness() {
+			return gl.State
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+}
+
+func (gl *GrentonLight) Set(state bool) {
+	
+	var err error
+	gl.block.Lock()
+	defer gl.block.Unlock()
+
+	stt := gl.GetReqLight()
+	if state {
+		stt.Cmd = "ON"
+	} else {
+		stt.Cmd = "OFF"
+	}
+
+	jsonQ, _ := json.Marshal(stt)
+	// log.Printf("Setting state, url:__\n %s", gl.clu.grentonSet.Host + gl.clu.grentonSet.SetLightPath)
+	// log.Printf("Setting state, query:__\n %s\n\n", jsonQ)
+	req, err := http.NewRequest("POST", gl.clu.grentonSet.Host + gl.clu.grentonSet.SetLightPath, bytes.NewBuffer(jsonQ))
+	if err != nil {
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := http.Client{
+		Timeout: 10 * time.Second,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
+		log.Print(resp.Status)
+		err = fmt.Errorf("Received non-success http response from grenton host.")
+		return
+	}
+
+	bodyBytes, _ := ioutil.ReadAll(resp.Body)
+	if string(bodyBytes) == "1" {
+		gl.State = true
+	} 
+
+	return
+}
+
 type GrentonClu struct {
-	Id     string
-	Lights []*GrentonLight
-	Block	sync.Mutex
+	Id     			string
+	Name			string
+	Lights 			[]*GrentonLight
+
+	grentonSet		*GrentonSet
+	block			sync.Mutex
 }
 
 
-func (gc *GrentonClu) AppendLight(lightId string) (*GrentonLight) {
-	gc.Block.Lock()
-	defer gc.Block.Unlock()
+func (gc *GrentonClu) GetIntId() uint32 {
+	cluIdS := gc.Id[3:]
+	var base int
+	if strings.HasPrefix(cluIdS, "_") {
+		base = 16
+	} else {
+		base = 10
+	}
+	uVal, err := strconv.ParseUint(cluIdS[1:], base, 32)
+	if err != nil {
+		log.Fatal("Converting clu id [%s] (to uint) failed: %v", gc.Id, err)
+	}
+	return uint32(uVal)
 
-	newLight := &GrentonLight{Id: lightId, CluId: gc.Id}
-	log.Printf("Light added %s", newLight.Id)
-	gc.Lights = append(gc.Lights, newLight)
-	// log.Print(gc)
-	return newLight
 }
+func (gc *GrentonClu) GetMixedId() string {
+	return gc.Id
+}
+func (gc *GrentonClu) InitLights() {
+	for _, light := range gc.Lights {
+		light.clu = gc
+		light.AppendHk()
+	}
+}
+
+func (gc *GrentonClu) GetAllHkAcc() (slc []*accessory.Accessory) {
+	slc = []*accessory.Accessory{}
+
+	for _, light := range gc.Lights {
+		slc = append(slc, light.HkAcc.Accessory)
+	}
+
+	return
+}
+
 
 type GrentonSet struct {
 	Host 			string
@@ -70,43 +186,59 @@ type GrentonSet struct {
 
 	Clus 			[]*GrentonClu
 
-	LastUpdated   	time.Time
-	FreshDuration	time.Duration
-	WaitingAnswer 	bool
-	Block         	sync.Mutex
+	HkPin			string
+	HkSetupId		string
+
+	FreshInSeconds	int
+
+	lastUpdated   	time.Time
+	freshDuration	time.Duration
+	waitingAnswer 	bool
+	block         	sync.Mutex
+}
+
+func (gs *GrentonSet) InitClus() {
+	for _, clu := range gs.Clus {
+		clu.grentonSet = gs
+		clu.InitLights()
+	}
+}
+
+func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.Accessory) {
+	slc = []*accessory.Accessory{}
+
+	for _, clu := range gs.Clus {
+		slc = append(slc, clu.GetAllHkAcc()...)
+	}
+
+	return
 }
 
 func (gs *GrentonSet) Refresh() {
-	if gs.WaitingAnswer {
+	if gs.waitingAnswer {
 		log.Printf("GrentonSet [%v] Refresh: already waiting for answer, skipping\n", &gs)
 		return
 	}
-	gs.WaitingAnswer = true
+	gs.waitingAnswer = true
 	err := gs.RequestAndUpdate()
 
 	if err != nil {
 		log.Print(err)
 		log.Printf("GrentonSet [%v] Refresh: request failed: %v\n", &gs, err)
-		gs.WaitingAnswer = false
+		gs.waitingAnswer = false
 		return
-		// err = gs.RequestAndUpdate()
-		// if err != nil {
-		// 	log.Print(err)
-		// 	log.Print("GrentonSet Refresh: request failed, giving up.")
-		// 	return
-		// }
 	}
 
-	gs.LastUpdated = time.Now()
-	gs.WaitingAnswer = false
+	gs.lastUpdated = time.Now()
+	gs.waitingAnswer = false
 	log.Printf("GrentonSet [%v] Refresh finished\n", &gs)
 }
 
 func (gs *GrentonSet) RequestAndUpdate() error {
 	log.Print("GrentonSet RequestAndUpdate +|-/|+|-/|+|-/|")
 
-	gs.Block.Lock()
-	defer gs.Block.Unlock()
+	gs.block.Lock()
+	defer gs.block.Unlock()
 	
 	query := []ReqLight{}
 	for _, clu := range gs.Clus {
@@ -168,9 +300,9 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 func (gs *GrentonSet) FindLight(fClu, fLight string) (found *GrentonLight, err error) {
 	// log.Printf("Looking for light: in %s id: %s\n", fLight, fClu)
 	for _, clu := range gs.Clus {
-		if clu.Id == fClu {
+		if clu.GetMixedId() == fClu {
 			for _, light := range clu.Lights {
-				if light.Id == fLight {
+				if light.GetMixedId() == fLight {
 					found = light
 					err = nil
 					return
@@ -186,7 +318,7 @@ func (gs *GrentonSet) FindLight(fClu, fLight string) (found *GrentonLight, err e
 
 func (gs *GrentonSet) FindCluOrNew(cluId string) (*GrentonClu) {
 	for _, clu := range gs.Clus {
-		if clu.Id == cluId {
+		if clu.GetMixedId() == cluId {
 			return clu
 		}
 	}
@@ -197,147 +329,66 @@ func (gs *GrentonSet) FindCluOrNew(cluId string) (*GrentonClu) {
 	return newClu
 }
 
-func (gs *GrentonSet) AppendLight(cluId, lightId string) (*GrentonLight) {
-	gs.Block.Lock()
-	defer gs.Block.Unlock()
-		
-	clu := gs.FindCluOrNew(cluId)
-	newL := clu.AppendLight(lightId)
 
-	return newL
+func (gs *GrentonSet) CheckFreshness() bool {
+	return time.Since(gs.lastUpdated) <= gs.freshDuration
 }
 
-func (gs *GrentonSet) SetLight(light *GrentonLight, state bool) (raw string, err error) {
-	light.Block.Lock()
-	defer light.Block.Unlock()
-
-	stt := light.GetReqLight()
-	if state {
-		stt.Cmd = "ON"
-	} else {
-		stt.Cmd = "OFF"
-	}
-
-	jsonQ, _ := json.Marshal(stt)
-	// log.Printf("SetLight req:__\n %s\n\n", jsonQ)
-	req, err := http.NewRequest("POST", gs.Host + gs.SetLightPath, bytes.NewBuffer(jsonQ))
-	if err != nil {
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	client := http.Client{
-		Timeout: 10 * time.Second,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return
-	}
-
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
-		log.Print(resp.Status)
-		err = fmt.Errorf("Received non-success http response from grenton host.")
-		return
-	}
-
-	bodyBytes, _ := ioutil.ReadAll(resp.Body)
-    raw = string(bodyBytes)
-    
-	return
-}
-
-func (gs *GrentonSet) HandleLight(w http.ResponseWriter, r *http.Request) {
-
-	rL := &ReqLight{}
-	
-    // bodyBytes, _ := ioutil.ReadAll(r.Body)
-    // bodyString := string(bodyBytes)
-    // log.Printf("ReqLight: \n%s\n", bodyString)
-
-    // err := json.Unmarshal(bodyBytes, rL)
-	err := json.NewDecoder(r.Body).Decode(rL)
-	if err !=  nil {
-		log.Print("GrentonSet HandleLight: error processing request: ", err)
-		return
-	}
-	
-	log.Printf("GrentonSet HandleLight: started for %s|%s", rL.Clu, rL.Dout)
-
-	light, err := gs.FindLight(rL.Clu, rL.Dout)
-	if err != nil {
-		// http.Error(w, "Light not found", 404)
-		log.Print("GrentonSet HandleLight: light not found, adding new and requestign data")
-		light = gs.AppendLight(rL.Clu, rL.Dout)
-		err = gs.RequestAndUpdate()
-		if err != nil {
-			log.Print("Error during request for new light: %v", err)
-		}
-	}
-
-	var rawState string
-
-	switch rL.Cmd {
-	case "ON":
-		rawState, err = gs.SetLight(light, true)
-	case "OFF": 
-		rawState, err = gs.SetLight(light, false)
-	default:
-		err = nil
-	}
-	if err != nil {
-		log.Print("GrentonSet HandleLight error during SetLight: %v", err)
-		return
-	}
-
-	if len(rawState) > 0 {
-		// log.Print(rawState)
-		fmt.Fprint(w, rawState)
-		return
-	}
-
-	
-	if time.Since(gs.LastUpdated) > gs.FreshDuration {
-		log.Printf("GrentonSet HandleLight (%s|%s): data not fresh, refreshing...", rL.Clu, rL.Dout)
-		go gs.Refresh()
-	}
-
-	for time.Since(gs.LastUpdated) > gs.FreshDuration {
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if light.State {
-		fmt.Fprint(w, "1")
-	} else {
-		fmt.Fprint(w, "0")
-	}
-}
 
 func main() {
 	log.Print("Starting grengate")
 
+	configPath := "./config.json"
+	configFile, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		log.Fatalf("Error openning config file: %v", err)
+	}
+
 	gren := GrentonSet{}
-	gren.Host = "http://10.100.81.73/"
-	gren.ReadPath = "multi/read/"
-	gren.SetLightPath = "homebridge"
-	gren.FreshDuration = 6 * time.Second
+	err = json.Unmarshal([]byte(configFile), &gren)
+	if err != nil {
+		log.Fatalf("Error loading config: %v", err)
+	}
 
-	log.Print("Starting http server")
-	http.HandleFunc("/grengate/light/", gren.HandleLight)
-	log.Fatal(http.ListenAndServe(":7732", nil))
-
+	// gren.Host = "http://10.100.81.73/"
+	// gren.ReadPath = "multi/read/"
+	// gren.SetLightPath = "homebridge"
 	
-	// rL := ReqLight{Clu: "CLU_AAxx", Dout: "DO0099"}
-	// light, err := gren.FindLight(rL.Clu, rL.Dout)
 
-	// if  err != nil {
-	// 	log.Print("No light found, adding:")
-	// 	light = gren.AppendLight(rL.Clu, rL.Dout)
-	// }
+	if gren.FreshInSeconds > 0 {
+		gren.freshDuration, err = time.ParseDuration(fmt.Sprintf("%ds", gren.FreshInSeconds))
+		if err != nil {
+			log.Print("error parsing duration from config, using default")
+			gren.freshDuration = 6 * time.Second
+		}
+	} else {
+		gren.freshDuration = 6 * time.Second	
+	}
 
-	// log.Print(gren)
-	// log.Print(light)
+	gren.InitClus()
+
+	log.Print("HomeKit init")
+
+	// create an accessory
+    info := accessory.Info{Name: "Lamp"}
+    ac := accessory.NewSwitch(info)
+  
+    config := hc.Config{
+    	Pin: gren.HkPin,
+    	SetupId: gren.HkSetupId,
+    }
+    t, err := hc.NewIPTransport(config, ac.Accessory, gren.GetAllHkAcc()...)
+    if err != nil {
+        log.Panic(err)
+    }
+    
+    hc.OnTermination(func(){
+        <-t.Stop()
+    })
+    
+    t.Start()
+
+
+
 
 }
