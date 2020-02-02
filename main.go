@@ -45,7 +45,7 @@ func (gl *GrentonLight) GetFullName() string {
 }
 
 func (gl *GrentonLight) GetMixedId() string {
-	return fmt.Sprintf("%s%4d", gl.Kind, gl.Id)
+	return fmt.Sprintf("%s%04d", gl.Kind, gl.Id)
 }
 
 func (gl *GrentonLight) GetReqLight() ReqLight {
@@ -76,14 +76,16 @@ func (gl *GrentonLight) Get() bool {
 		return gl.State
 	} 
 
-	gl.clu.grentonSet.Refresh()
+	go gl.clu.grentonSet.Refresh()
 
-	for {
+	for ix := 0; ix < 500; ix++ {
 		if gl.clu.grentonSet.CheckFreshness() {
 			return gl.State
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	log.Printf("----\nGrentonLight Get error: GrentonSet Refresh timeout!\n")
+	return gl.State
 
 }
 
@@ -131,6 +133,42 @@ func (gl *GrentonLight) Set(state bool) {
 	} 
 
 	return
+}
+
+func (gl *GrentonLight) TestGrentonGate() bool {
+	gl.block.Lock()
+	defer gl.block.Unlock()
+	
+	jsonQ, err := json.Marshal(gl.GetReqLight())
+	if err != nil {
+		log.Printf("TestGrentonGate failed (json) for light: %s | %s", gl.Name, gl.GetMixedId())
+		return false
+	}
+
+	req, err := http.NewRequest("POST", gl.clu.grentonSet.Host + gl.clu.grentonSet.SetLightPath, bytes.NewBuffer(jsonQ))
+	if err != nil {
+		log.Printf("TestGrentonGate failed (request) for light: %s | %s", gl.Name, gl.GetMixedId())
+		return false
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := http.Client{
+		Timeout: 10 * time.Second,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("TestGrentonGate failed (client.Do) for light: %s | %s", gl.Name, gl.GetMixedId())
+		return false
+	}
+
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
+		log.Printf("TestGrentonGate failed (%s) for light: %s | %s",resp.Status, gl.Name, gl.GetMixedId())
+		return false
+	}
+
+	return true
 }
 
 type GrentonClu struct {
@@ -243,7 +281,9 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 	query := []ReqLight{}
 	for _, clu := range gs.Clus {
 		for _, light := range clu.Lights {
-			query = append(query, light.GetReqLight())
+			if light != nil {
+				query = append(query, light.GetReqLight())
+			}
 		}
 	}
 	// log.Print(query)
@@ -273,10 +313,10 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 	data := []ReqLight{}
 
 	// bodyBytes, _ := ioutil.ReadAll(resp.Body)
-    // bodyString := string(bodyBytes)
-    // log.Printf("----------\n\n%s\n\n", bodyString)
+ //    bodyString := string(bodyBytes)
+ //    log.Printf("----------\n\n%s\n\n", bodyString)
 
-    // err = json.Unmarshal(bodyBytes, &data)
+ //    err = json.Unmarshal(bodyBytes, &data)
 	err = json.NewDecoder(resp.Body).Decode(&data)
 
 	if err != nil {
@@ -302,7 +342,7 @@ func (gs *GrentonSet) FindLight(fClu, fLight string) (found *GrentonLight, err e
 	for _, clu := range gs.Clus {
 		if clu.GetMixedId() == fClu {
 			for _, light := range clu.Lights {
-				if light.GetMixedId() == fLight {
+				if light.GetMixedId() == fLight && light != nil {
 					found = light
 					err = nil
 					return
@@ -316,24 +356,26 @@ func (gs *GrentonSet) FindLight(fClu, fLight string) (found *GrentonLight, err e
 }
 
 
-func (gs *GrentonSet) FindCluOrNew(cluId string) (*GrentonClu) {
-	for _, clu := range gs.Clus {
-		if clu.GetMixedId() == cluId {
-			return clu
-		}
-	}
-
-	newClu := &GrentonClu{Id: cluId}
-	gs.Clus = append(gs.Clus, newClu)
-	log.Printf("CLU added %s", newClu.Id)
-	return newClu
-}
-
-
 func (gs *GrentonSet) CheckFreshness() bool {
 	return time.Since(gs.lastUpdated) <= gs.freshDuration
 }
 
+func (gs *GrentonSet) TestAllGrentonGate() {
+	log.Print("Performing Grenton GATE test for all")
+	for _, clu := range gs.Clus {
+		for _, light := range clu.Lights {
+			if !light.TestGrentonGate() {
+				log.Printf("Test failed for %s|%s, waiting and repeating", light.Name, light.GetMixedId())
+				time.Sleep(3 * time.Second)
+				if !light.TestGrentonGate() {
+					log.Printf("Test failed again (%s|%s), removing from clu/set", light.Name, light.GetMixedId())
+					light = nil
+				}
+			}
+		}
+	}
+	log.Print("GATE test finished")
+}
 
 func main() {
 	log.Print("Starting grengate")
@@ -350,9 +392,6 @@ func main() {
 		log.Fatalf("Error loading config: %v", err)
 	}
 
-	// gren.Host = "http://10.100.81.73/"
-	// gren.ReadPath = "multi/read/"
-	// gren.SetLightPath = "homebridge"
 	
 
 	if gren.FreshInSeconds > 0 {
@@ -381,13 +420,16 @@ func main() {
     if err != nil {
         log.Panic(err)
     }
+
+
+    log.Print("Testing all Grenton elements")
+    gren.TestAllGrentonGate()
     
     hc.OnTermination(func(){
         <-t.Stop()
     })
     
     t.Start()
-
 
 
 

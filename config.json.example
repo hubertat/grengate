@@ -1,0 +1,41 @@
+## config.json for grengate EXAMPLE
+## remove all comments, use proper values!
+{
+	## HomeKit pairing config, pin is important (need to enter it, 8 digits), setup id less  important (4 cap. chars)
+	"HkPin": "12344321",
+	"HkSetupId": "ABCD",
+
+	## grenton gate ip and paths
+	"Host": "http://192.168.0.1/",
+	"ReadPath": "read/",
+	"SetLightPath": "set/",
+
+	## data 'freshness' after how many seconds refresh all data
+	"FreshInSeconds": 5,
+
+	## define clus and devices here
+	"Clus": [
+		{
+			"Id": "CLU_012abcde",
+			"Name": "clu one",
+			"Lights": [
+				{
+					"Id": 1234,
+					"Kind": "DOU",
+					"Name": "Light x"
+				}
+			]
+		},		
+		{
+			"Id": "CLU110000123",
+			"Name": "clu two",
+			"Lights": [
+				{
+					"Id": 4321,
+					"Kind": "DOU",
+					"Name": "Light other"
+				}
+			]
+		}
+	]
+}
