@@ -9,6 +9,49 @@ import (
 	"github.com/brutella/hc/accessory"
 )
 
+type ReqSource struct {
+	variable	string		`json:",omitempty"`
+	value		float32		`json:",omitempty"`
+}
+
+type ReqThermo struct {
+	Source				*ReqSource	`json:",omitempty"`
+
+	PointValue			float32		`json:",omitempty"`
+	HolidayModeValue	float32		`json:",omitempty"`
+	Hysteresis			float32		`json:",omitempty"`
+	State				int			`json:",omitempty"`
+	ControlDirection	int			`json:",omitempty"`
+	Mode				int			`json:",omitempty"`
+	Min					float32		`json:",omitempty"`
+	Max					float32		`json:",omitempty"`
+
+	TargetTemp			float32		`json:",omitempty"`
+	ControlOutValue		int			`json:",omitempty"`
+}
+
+type ReqLight struct {
+	State		bool
+}
+
+type ReqCmd struct {
+	Cmd			string
+	ValFloat	float64		`json:",omitempty"`
+	ValInt		int			`json:",omitempty"`
+	ValBool		bool		`json:",omitempty"`
+	ValString	string		`json:",omitempty"`
+}
+
+type ReqObject struct {
+	Clu 	string
+	Id 		string
+	Kind 	string
+
+	Cmd		*ReqCmd		`json:",omitempty"`
+	Light	*ReqLight	`json:",omitempty"`
+	Thermo	*ReqThermo	`json:",omitempty"`
+}
+
 type GrentonClu struct {
 	Id     string
 	Name   string

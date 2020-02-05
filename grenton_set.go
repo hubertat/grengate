@@ -120,11 +120,11 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 	gs.block.Lock()
 	defer gs.block.Unlock()
 	
-	query := []ReqLight{}
+	query := []ReqObject{}
 	for _, clu := range gs.Clus {
 		for _, light := range clu.Lights {
 			if light != nil {
-				query = append(query, light.GetReqLight())
+				query = append(query, light.GetReqObject())
 			}
 		}
 	}
@@ -152,7 +152,7 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 		return fmt.Errorf("Received non-success http response from grenton host.")
 	}
 
-	data := []ReqLight{}
+	data := []ReqObject{}
 
 	bodyBytes, _ := ioutil.ReadAll(resp.Body)
     bodyString := string(bodyBytes)
@@ -163,12 +163,19 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 		return err
 	}
 
-	for _, resLight := range data {
-		myLight, err := gs.FindLight(resLight.Clu, resLight.Dout)
-		if err == nil {
-			gs.Debugf("GrentonSet RequestAndUpdate: found light from request, state: %v\n", resLight.State)
-			myLight.State = resLight.State == 1
-			myLight.Sync()
+	for _, object := range data {
+		switch object.Kind	{
+		default:
+			gs.Logf("GrentonSet RequestAndUpdate: unmatched object kind: %s\n", object.Kind)
+		case "DOU":
+			light, err := gs.FindLight(object.Clu, object.Id)	
+			if err == nil {
+				gs.Debugf("GrentonSet RequestAndUpdate: found light from request, state: %+v\n", object)
+				err = light.LoadReqObject(object)
+				if err != nil {
+					gs.Error(fmt.Errorf("GrentonSet RequestAndUpdate loading (%s|%s) failed: %w", object.Clu, object.Id, err))
+				}
+			}
 		}
 	}
 

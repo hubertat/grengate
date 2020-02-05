@@ -14,13 +14,6 @@ import (
     "github.com/brutella/hc/accessory"
 )
 
-type ReqLight struct {
-	Clu 	string		`json:"clu"`
-	Dout 	string		`json:"dout"`
-	Cmd		string		`json:"cmd,omitempty"`
-	State	int			`json:"state,omitempty"`
-}
-
 type GrentonLight struct {
 	Id    	uint32
 	Name 	string
@@ -45,11 +38,28 @@ func (gl *GrentonLight) GetMixedId() string {
 	return fmt.Sprintf("%s%04d", gl.Kind, gl.Id)
 }
 
-func (gl *GrentonLight) GetReqLight() ReqLight {
-	return ReqLight{
-		Dout:  gl.GetMixedId(),
+func (gl *GrentonLight) GetReqObject() ReqObject {
+	return ReqObject{
+		Id:  gl.GetMixedId(),
 		Clu: gl.clu.GetMixedId(),
+		Kind: "DOU",
+		Light: &ReqLight{State: gl.State},
 	}
+}
+
+func (gl *GrentonLight) LoadReqObject(obj ReqObject) error {
+	if obj.Kind != "DOU" {
+		return fmt.Errorf("GrentonLight LoadReqObject: wrong object kind (%s)", obj.Kind)
+	}
+
+	if obj.Light == nil {
+		return fmt.Errorf("GrentonLight LoadReqObject: light object missing")
+	}
+
+	gl.State =  obj.Light.State
+	gl.Sync()
+
+	return nil
 }
 
 func (gl *GrentonLight) AppendHk() *accessory.Lightbulb {
@@ -107,12 +117,8 @@ func (gl *GrentonLight) Set(state bool) {
 	gl.block.Lock()
 	defer gl.block.Unlock()
 
-	stt := gl.GetReqLight()
-	if state {
-		stt.Cmd = "ON"
-	} else {
-		stt.Cmd = "OFF"
-	}
+	stt := gl.GetReqObject()
+	stt.Cmd = &ReqCmd{Cmd: "SET", ValBool: state}
 
 	jsonQ, _ := json.Marshal(stt)
 	gl.clu.grentonSet.Debugf("GrentonLight Set: \nurl: %s\nquery: %s\n", gl.clu.grentonSet.Host + gl.clu.grentonSet.SetLightPath, jsonQ)
@@ -152,7 +158,7 @@ func (gl *GrentonLight) TestGrentonGate() bool {
 	gl.block.Lock()
 	defer gl.block.Unlock()
 	
-	jsonQ, err := json.Marshal(gl.GetReqLight())
+	jsonQ, err := json.Marshal(gl.GetReqObject())
 	if err != nil {
 		gl.clu.grentonSet.Logf("TestGrentonGate failed (json) for light: %s | %s", gl.Name, gl.GetMixedId())
 		return false
