@@ -2,190 +2,91 @@ package main
 
 import (
 	"fmt"
-
-	"net/http"
-	// "net/url"
-	"encoding/json"
-	"sync"
-	"time"
-	"bytes"
-	"io/ioutil"
-
-    "github.com/brutella/hc/accessory"
+	"github.com/brutella/hc/accessory"
 )
 
-type GrentonLight struct {
-	Id    	uint32
-	Name 	string
-	State 	bool
-	Kind	string
+type Light struct {
+	CluObject
 
-	clu		*GrentonClu
-	block	sync.Mutex
+	State bool
 
-	HkAcc	*accessory.Lightbulb
+	hk *accessory.Lightbulb `json:"-"`
 }
 
-func (gl *GrentonLight) GetLongId() uint64 {
-	return (uint64(gl.clu.GetIntId()) << 32) + uint64(gl.Id)
-}
-
-func (gl *GrentonLight) GetFullName() string {
-	return fmt.Sprintf("%s%4d", gl.Kind, gl.Id)
-}
-
-func (gl *GrentonLight) GetMixedId() string {
-	return fmt.Sprintf("%s%04d", gl.Kind, gl.Id)
-}
-
-func (gl *GrentonLight) GetReqObject() ReqObject {
-	return ReqObject{
-		Id:  gl.GetMixedId(),
-		Clu: gl.clu.GetMixedId(),
-		Kind: "DOU",
-		Light: &ReqLight{State: gl.State},
-	}
-}
-
-func (gl *GrentonLight) LoadReqObject(obj ReqObject) error {
-	if obj.Kind != "DOU" {
-		return fmt.Errorf("GrentonLight LoadReqObject: wrong object kind (%s)", obj.Kind)
+func (gl *Light) LoadReqObject(obj ReqObject) error {
+	if obj.Kind != "Light" {
+		return fmt.Errorf("Light LoadReqObject: wrong object kind (%s)", obj.Kind)
 	}
 
 	if obj.Light == nil {
-		return fmt.Errorf("GrentonLight LoadReqObject: light object missing")
+		return fmt.Errorf("Light LoadReqObject: missing Light object")
 	}
 
-	gl.State =  obj.Light.State
+	gl.State = obj.Light.State
 	gl.Sync()
 
 	return nil
 }
 
-func (gl *GrentonLight) AppendHk() *accessory.Lightbulb {
+func (gl *Light) InitAll() {
+	gl.Req = ReqObject{
+		Kind: "Light",
+		Clu: gl.clu.Id,
+		Id: gl.GetMixedId(),
+
+		// Light: gl,
+	}
+	gl.AppendHk()
+}
+func (gl *Light) AppendHk() *accessory.Lightbulb {
 	info := accessory.Info{
-		Name: gl.Name,
+		Name:         gl.Name,
 		SerialNumber: fmt.Sprintf("%d", gl.Id),
 		Manufacturer: "Grenton",
-		Model: gl.Kind,
-		ID: gl.GetLongId(),
-	}
-	
-	gl.HkAcc = accessory.NewLightbulb(info)
-	gl.HkAcc.Lightbulb.On.OnValueRemoteUpdate(gl.Set)
-	gl.HkAcc.Lightbulb.On.OnValueRemoteGet(gl.Get)
-	gl.clu.grentonSet.Logf("HK Lightbulb added (id: %x, type: %d", gl.HkAcc.Accessory.ID, gl.HkAcc.Accessory.Type)
-	return gl.HkAcc
-}
-
-func (gl *GrentonLight) Sync() {
-	gl.HkAcc.Lightbulb.On.SetValue(gl.State)
-}
-
-func (gl *GrentonLight) Update() error {
-
-	go gl.clu.grentonSet.Refresh()
-
-	for ix := 0; ix < 500; ix++ {
-		if gl.clu.grentonSet.CheckFreshness() {
-			return nil
-		}
-		time.Sleep(20 * time.Millisecond)
+		Model:        gl.Kind,
+		ID:           gl.GetLongId(),
 	}
 
-	return fmt.Errorf("GrentonLight Get (for %s) error: GrentonSet Refresh timeout!\n", gl.Name)
+	gl.hk = accessory.NewLightbulb(info)
+	gl.hk.Lightbulb.On.OnValueRemoteUpdate(gl.Set)
+	gl.hk.Lightbulb.On.OnValueRemoteGet(gl.Get)
+
+	gl.clu.set.Logf("HK Lightbulb added (id: %x, type: %d", gl.hk.Accessory.ID, gl.hk.Accessory.Type)
+	return gl.hk
 }
 
-func (gl *GrentonLight) Get() bool {
+func (gl *Light) Sync() {
+	gl.hk.Lightbulb.On.SetValue(gl.State)
+}
 
-	if gl.clu.grentonSet.CheckFreshness() {
+func (gl *Light) Get() bool {
+
+	if gl.clu.set.CheckFreshness() {
 		return gl.State
-	} 
+	}
 
 	err := gl.Update()
 	if err != nil {
-		gl.clu.grentonSet.Error(err)
+		gl.clu.set.Error(err)
 	}
 
 	return gl.State
 
 }
 
-func (gl *GrentonLight) Set(state bool) {
-	
-	var err error
-	gl.block.Lock()
-	defer gl.block.Unlock()
+func (gl *Light) Set(state bool) {
 
-	stt := gl.GetReqObject()
-	stt.Cmd = &ReqCmd{Cmd: "SET", ValBool: state}
+	gl.State = state
 
-	jsonQ, _ := json.Marshal(stt)
-	gl.clu.grentonSet.Debugf("GrentonLight Set: \nurl: %s\nquery: %s\n", gl.clu.grentonSet.Host + gl.clu.grentonSet.SetLightPath, jsonQ)
+	req := gl.Req
+	req.Light = gl
+	obj, err := gl.SendReq(req)
 	
-	req, err := http.NewRequest("POST", gl.clu.grentonSet.Host + gl.clu.grentonSet.SetLightPath, bytes.NewBuffer(jsonQ))
 	if err != nil {
 		return
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-
-	client := http.Client{
-		Timeout: 10 * time.Second,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return
-	}
-
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
-		err = fmt.Errorf("GrentonLight Set: Received non-success http response from grenton host: %v", resp.Status)
-		gl.clu.grentonSet.Error(err)
-		return
-	}
-
-	bodyBytes, _ := ioutil.ReadAll(resp.Body)
-
-	gl.State = string(bodyBytes) == "1"
-
-	gl.Sync()
+	gl.LoadReqObject(obj)
 
 	return
-}
-
-func (gl *GrentonLight) TestGrentonGate() bool {
-	gl.block.Lock()
-	defer gl.block.Unlock()
-	
-	jsonQ, err := json.Marshal(gl.GetReqObject())
-	if err != nil {
-		gl.clu.grentonSet.Logf("TestGrentonGate failed (json) for light: %s | %s", gl.Name, gl.GetMixedId())
-		return false
-	}
-
-	req, err := http.NewRequest("POST", gl.clu.grentonSet.Host + gl.clu.grentonSet.SetLightPath, bytes.NewBuffer(jsonQ))
-	if err != nil {
-		gl.clu.grentonSet.Logf("TestGrentonGate failed (request) for light: %s | %s", gl.Name, gl.GetMixedId())
-		return false
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	client := http.Client{
-		Timeout: 10 * time.Second,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		gl.clu.grentonSet.Logf("TestGrentonGate failed (client.Do) for light: %s | %s", gl.Name, gl.GetMixedId())
-		return false
-	}
-
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
-		gl.clu.grentonSet.Logf("TestGrentonGate failed (%s) for light: %s | %s",resp.Status, gl.Name, gl.GetMixedId())
-		return false
-	}
-
-	return true
 }

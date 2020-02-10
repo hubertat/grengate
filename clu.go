@@ -9,59 +9,17 @@ import (
 	"github.com/brutella/hc/accessory"
 )
 
-type ReqSource struct {
-	variable	string		`json:",omitempty"`
-	value		float32		`json:",omitempty"`
-}
-
-type ReqThermo struct {
-	Source				*ReqSource	`json:",omitempty"`
-
-	PointValue			float32		`json:",omitempty"`
-	HolidayModeValue	float32		`json:",omitempty"`
-	Hysteresis			float32		`json:",omitempty"`
-	State				int			`json:",omitempty"`
-	ControlDirection	int			`json:",omitempty"`
-	Mode				int			`json:",omitempty"`
-	Min					float32		`json:",omitempty"`
-	Max					float32		`json:",omitempty"`
-
-	TargetTemp			float32		`json:",omitempty"`
-	ControlOutValue		int			`json:",omitempty"`
-}
-
-type ReqLight struct {
-	State		bool
-}
-
-type ReqCmd struct {
-	Cmd			string
-	ValFloat	float64		`json:",omitempty"`
-	ValInt		int			`json:",omitempty"`
-	ValBool		bool		`json:",omitempty"`
-	ValString	string		`json:",omitempty"`
-}
-
-type ReqObject struct {
-	Clu 	string
-	Id 		string
-	Kind 	string
-
-	Cmd		*ReqCmd		`json:",omitempty"`
-	Light	*ReqLight	`json:",omitempty"`
-	Thermo	*ReqThermo	`json:",omitempty"`
-}
-
-type GrentonClu struct {
+type Clu struct {
 	Id     string
 	Name   string
-	Lights []*GrentonLight
+	Lights []*Light
+	Therms []*Thermo
 
-	grentonSet *GrentonSet
-	block      sync.Mutex
+	set   *GrentonSet
+	block sync.Mutex
 }
 
-func (gc *GrentonClu) GetIntId() uint32 {
+func (gc *Clu) GetIntId() uint32 {
 	cluIdS := gc.Id[3:]
 	var base int
 	if strings.HasPrefix(cluIdS, "_") {
@@ -72,26 +30,35 @@ func (gc *GrentonClu) GetIntId() uint32 {
 	uVal, err := strconv.ParseUint(cluIdS[1:], base, 32)
 	if err != nil {
 		err = fmt.Errorf("Converting clu id [%s] (to uint) failed: %v", gc.Id, err)
-		gc.grentonSet.Error(err)
+		gc.set.Error(err)
 	}
 	return uint32(uVal)
 
 }
-func (gc *GrentonClu) GetMixedId() string {
+func (gc *Clu) GetMixedId() string {
 	return gc.Id
 }
-func (gc *GrentonClu) InitLights() {
+func (gc *Clu) InitAll() {
 	for _, light := range gc.Lights {
 		light.clu = gc
-		light.AppendHk()
+		light.InitAll()
+	}
+
+	for _, thermo := range gc.Therms {
+		thermo.clu = gc
+		thermo.InitAll()
 	}
 }
 
-func (gc *GrentonClu) GetAllHkAcc() (slc []*accessory.Accessory) {
+func (gc *Clu) GetAllHkAcc() (slc []*accessory.Accessory) {
 	slc = []*accessory.Accessory{}
 
 	for _, light := range gc.Lights {
-		slc = append(slc, light.HkAcc.Accessory)
+		slc = append(slc, light.hk.Accessory)
+	}
+
+	for _, thermo := range gc.Therms {
+		slc = append(slc, thermo.hk.Accessory)
 	}
 
 	return

@@ -20,12 +20,13 @@ func main() {
 
 	gren.InitClus()
 
-	log.Print("Testing all Grenton elements")
-	gren.TestAllGrentonGate()
+	if gren.PerformAutotest {
+		log.Print("Testing all Grenton elements")
+		gren.TestAllGrentonGate()
+	}
 
 	log.Print("Starting update cycles")
 	gren.StartCycling()
-
 
 	log.Print("HomeKit init")
 	// create an accessory

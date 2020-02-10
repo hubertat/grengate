@@ -5,37 +5,37 @@ import (
 	"log"
 	"net/http"
 	// "net/url"
+	"bytes"
 	"encoding/json"
 	"io/ioutil"
 	"sync"
 	"time"
-	"bytes"
 
-    "github.com/brutella/hc/accessory"
+	"github.com/brutella/hc/accessory"
 )
 
 type GrentonSet struct {
-	Host 			string
-	ReadPath		string
-	SetLightPath	string
+	Host         string
+	ReadPath     string
+	SetLightPath string
 
-	Clus 			[]*GrentonClu
+	Clus []*Clu
 
-	HkPin			string
-	HkSetupId		string
+	HkPin     string
+	HkSetupId string
 
-	FreshInSeconds	int
-	CycleInSeconds	int
-	Verbose			bool
+	FreshInSeconds  int
+	CycleInSeconds  int
+	Verbose         bool
+	PerformAutotest bool
 
-	lastUpdated   	time.Time
-	freshDuration	time.Duration
-	cycleDuration	time.Duration
-	cycling			*time.Ticker
-	waitingAnswer 	bool
-	block         	sync.Mutex
+	lastUpdated   time.Time
+	freshDuration time.Duration
+	cycleDuration time.Duration
+	cycling       *time.Ticker
+	waitingAnswer bool
+	block         sync.Mutex
 }
-
 
 func (gs *GrentonSet) Debugf(format string, v ...interface{}) {
 	if gs.Verbose {
@@ -80,9 +80,13 @@ func (gs *GrentonSet) Config(path string) error {
 
 func (gs *GrentonSet) InitClus() {
 	for _, clu := range gs.Clus {
-		clu.grentonSet = gs
-		clu.InitLights()
+		clu.set = gs
+		clu.InitAll()
 	}
+}
+
+func (gs *GrentonSet) GetSetPath() string {
+	return gs.Host + gs.SetLightPath
 }
 
 func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.Accessory) {
@@ -119,19 +123,25 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 
 	gs.block.Lock()
 	defer gs.block.Unlock()
-	
+
 	query := []ReqObject{}
 	for _, clu := range gs.Clus {
 		for _, light := range clu.Lights {
 			if light != nil {
-				query = append(query, light.GetReqObject())
+				query = append(query, light.Req)
+			}
+		}
+		for _, thermo := range clu.Therms {
+			if thermo != nil {
+				query = append(query, thermo.Req)
 			}
 		}
 	}
-	
+
 	jsonQ, _ := json.Marshal(query)
+	gs.Logf("GrentonSet RequestAndUpdate: query prepared, size: %d", len(jsonQ))
 	gs.Debugf("GrentonSet RequestAndUpdate: json query:\n%s\n", jsonQ)
-	req, err := http.NewRequest("POST", gs.Host + gs.ReadPath, bytes.NewBuffer(jsonQ))
+	req, err := http.NewRequest("POST", gs.Host+gs.ReadPath, bytes.NewBuffer(jsonQ))
 	if err != nil {
 		return err
 	}
@@ -155,23 +165,33 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 	data := []ReqObject{}
 
 	bodyBytes, _ := ioutil.ReadAll(resp.Body)
-    bodyString := string(bodyBytes)
-    gs.Debugf("GrentonSet RequestAndUpdate: received body:\n%s\n", bodyString)
+	bodyString := string(bodyBytes)
+	gs.Debugf("GrentonSet RequestAndUpdate: received body:\n%s\n", bodyString)
 
-    err = json.Unmarshal(bodyBytes, &data)
+	err = json.Unmarshal(bodyBytes, &data)
+	log.Printf("\n\n%+v\n", data)
 	if err != nil {
 		return err
 	}
 
 	for _, object := range data {
-		switch object.Kind	{
+		switch object.Kind {
 		default:
 			gs.Logf("GrentonSet RequestAndUpdate: unmatched object kind: %s\n", object.Kind)
-		case "DOU":
-			light, err := gs.FindLight(object.Clu, object.Id)	
+		case "Light":
+			light, err := gs.FindLight(object.Clu, object.Id)
 			if err == nil {
 				gs.Debugf("GrentonSet RequestAndUpdate: found light from request, state: %+v\n", object)
 				err = light.LoadReqObject(object)
+				if err != nil {
+					gs.Error(fmt.Errorf("GrentonSet RequestAndUpdate loading (%s|%s) failed: %w", object.Clu, object.Id, err))
+				}
+			}
+		case "Thermo":
+			thermo, err := gs.FindThermo(object.Clu, object.Id)
+			if err == nil {
+				gs.Debugf("GrentonSet RequestAndUpdate: found thermo from request, state: %+v\n", object)
+				err = thermo.LoadReqObject(object)
 				if err != nil {
 					gs.Error(fmt.Errorf("GrentonSet RequestAndUpdate loading (%s|%s) failed: %w", object.Clu, object.Id, err))
 				}
@@ -182,7 +202,24 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 	return nil
 }
 
-func (gs *GrentonSet) FindLight(fClu, fLight string) (found *GrentonLight, err error) {
+func (gs *GrentonSet) FindThermo(fClu, fLight string) (found *Thermo, err error) {
+	gs.Debugf("GrentonSet FindThermo: Looking for thermo: in %s id: %s\n", fLight, fClu)
+	for _, clu := range gs.Clus {
+		if clu.GetMixedId() == fClu {
+			for _, thermo := range clu.Therms {
+				if thermo.GetMixedId() == fLight && thermo != nil {
+					found = thermo
+					err = nil
+					return
+				}
+			}
+		}
+	}
+	err = fmt.Errorf("Thermostat not found [clu: %s id: %s]", fLight, fClu)
+	return
+}
+
+func (gs *GrentonSet) FindLight(fClu, fLight string) (found *Light, err error) {
 	gs.Debugf("GrentonSet FindLight: Looking for light: in %s id: %s\n", fLight, fClu)
 	for _, clu := range gs.Clus {
 		if clu.GetMixedId() == fClu {
@@ -199,7 +236,6 @@ func (gs *GrentonSet) FindLight(fClu, fLight string) (found *GrentonLight, err e
 	return
 }
 
-
 func (gs *GrentonSet) CheckFreshness() bool {
 	return time.Since(gs.lastUpdated) <= gs.freshDuration
 }
@@ -208,10 +244,21 @@ func (gs *GrentonSet) TestAllGrentonGate() {
 	gs.Logf("GrentonSet TestAllGrentonGate: Performing Grenton GATE test for all")
 	for _, clu := range gs.Clus {
 		for _, light := range clu.Lights {
-			if !light.TestGrentonGate() {
+			if !light.TestGrentonGate(light.Req) {
 				gs.Logf("GrentonSet TestAllGrentonGate: Test failed for %s|%s, waiting and repeating", light.Name, light.GetMixedId())
 				time.Sleep(3 * time.Second)
-				if !light.TestGrentonGate() {
+				if !light.TestGrentonGate(light.Req) {
+					gs.Logf("GrentonSet TestAllGrentonGate: Test failed again (%s|%s), removing from clu/set", light.Name, light.GetMixedId())
+					light = nil
+				}
+			}
+		}
+
+		for _, light := range clu.Therms {
+			if !light.TestGrentonGate(light.Req) {
+				gs.Logf("GrentonSet TestAllGrentonGate: Test failed for %s|%s, waiting and repeating", light.Name, light.GetMixedId())
+				time.Sleep(3 * time.Second)
+				if !light.TestGrentonGate(light.Req) {
 					gs.Logf("GrentonSet TestAllGrentonGate: Test failed again (%s|%s), removing from clu/set", light.Name, light.GetMixedId())
 					light = nil
 				}
@@ -227,7 +274,7 @@ func (gs *GrentonSet) StartCycling() {
 
 		for {
 			select {
-			case <- gs.cycling.C:
+			case <-gs.cycling.C:
 				go gs.Refresh()
 			}
 		}
