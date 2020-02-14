@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	// "net/url"
 	"bytes"
 	"encoding/json"
 	"io/ioutil"
@@ -14,6 +13,7 @@ import (
 	"github.com/brutella/hc/accessory"
 )
 
+// GrentonSet is main struct representing settings and having child Clu structs 
 type GrentonSet struct {
 	Host         string
 	ReadPath     string
@@ -37,18 +37,24 @@ type GrentonSet struct {
 	block         sync.Mutex
 }
 
+// Debugf logs info, when Verbose option is on
 func (gs *GrentonSet) Debugf(format string, v ...interface{}) {
 	if gs.Verbose {
 		gs.Logf(format, v...)
 	}
 }
+
+// Logf logs info
 func (gs *GrentonSet) Logf(format string, v ...interface{}) {
 	log.Printf(format, v...)
 }
+
+// Error logs errors, needed when function is running in goroutine
 func (gs *GrentonSet) Error(err error) {
 	log.Printf("!__Error_:\n%s\n___\n", err.Error())
 }
 
+// Config is loading config file from provided path
 func (gs *GrentonSet) Config(path string) error {
 
 	configFile, err := ioutil.ReadFile(path)
@@ -78,6 +84,7 @@ func (gs *GrentonSet) Config(path string) error {
 	return nil
 }
 
+// InitClus initialize every clu object, calls inner InitAll and sets pointer to parent struct
 func (gs *GrentonSet) InitClus() {
 	for _, clu := range gs.Clus {
 		clu.set = gs
@@ -85,10 +92,12 @@ func (gs *GrentonSet) InitClus() {
 	}
 }
 
+// GetSetPath returns http path for setting value in grenton gate
 func (gs *GrentonSet) GetSetPath() string {
 	return gs.Host + gs.SetLightPath
 }
 
+// GetAllHkAcc returns a slice with every HomeKit Accessory pointer
 func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.Accessory) {
 	slc = []*accessory.Accessory{}
 
@@ -99,6 +108,7 @@ func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.Accessory) {
 	return
 }
 
+// Refres is calling RequestAndUpdate function to get fresh values
 func (gs *GrentonSet) Refresh() {
 	if gs.waitingAnswer {
 		gs.Debugf("GrentonSet [%v] Refresh: already waiting for answer, skipping\n", &gs)
@@ -118,6 +128,7 @@ func (gs *GrentonSet) Refresh() {
 	gs.Debugf("GrentonSet [%v] Refresh finished\n", &gs)
 }
 
+// RequestAndUpdate collects all needed objects and make POST request to update state of objects
 func (gs *GrentonSet) RequestAndUpdate() error {
 	gs.Logf("GrentonSet RequestAndUpdate: started [%v]", &gs)
 
@@ -202,6 +213,7 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 	return nil
 }
 
+// FindThermo returns a Thermo object belonging to selected clu and with selected id
 func (gs *GrentonSet) FindThermo(fClu, fLight string) (found *Thermo, err error) {
 	gs.Debugf("GrentonSet FindThermo: Looking for thermo: in %s id: %s\n", fLight, fClu)
 	for _, clu := range gs.Clus {
@@ -219,6 +231,7 @@ func (gs *GrentonSet) FindThermo(fClu, fLight string) (found *Thermo, err error)
 	return
 }
 
+// FindLight returns a Light object belonging to selected clu and with selected id
 func (gs *GrentonSet) FindLight(fClu, fLight string) (found *Light, err error) {
 	gs.Debugf("GrentonSet FindLight: Looking for light: in %s id: %s\n", fLight, fClu)
 	for _, clu := range gs.Clus {
@@ -236,10 +249,12 @@ func (gs *GrentonSet) FindLight(fClu, fLight string) (found *Light, err error) {
 	return
 }
 
+// CheckFreshness checks if time passed from last refresh is greater than set treshold
 func (gs *GrentonSet) CheckFreshness() bool {
 	return time.Since(gs.lastUpdated) <= gs.freshDuration
 }
 
+// TestAllGrentonGate iterates every object and checks individually if request is success http code
 func (gs *GrentonSet) TestAllGrentonGate() {
 	gs.Logf("GrentonSet TestAllGrentonGate: Performing Grenton GATE test for all")
 	for _, clu := range gs.Clus {
@@ -268,6 +283,7 @@ func (gs *GrentonSet) TestAllGrentonGate() {
 	gs.Logf("GrentonSet TestAllGrentonGate: GATE test finished")
 }
 
+// StartCycling starts a goroutine which periodically refreshes state of all objects
 func (gs *GrentonSet) StartCycling() {
 	go func() {
 		gs.cycling = time.NewTicker(gs.cycleDuration)
