@@ -12,8 +12,11 @@ import (
 type Clu struct {
 	Id     string
 	Name   string
+
 	Lights []*Light
 	Therms []*Thermo
+	Shutters []*Shutter
+	SimpleShutters []*ShutterSimple
 
 	set   *GrentonSet
 	block sync.Mutex
@@ -48,6 +51,10 @@ func (gc *Clu) InitAll() {
 		thermo.clu = gc
 		thermo.InitAll()
 	}
+	for _, sht := range gc.SimpleShutters {
+		sht.clu = gc
+		sht.InitAll()
+	}
 }
 
 func (gc *Clu) GetAllHkAcc() (slc []*accessory.Accessory) {
@@ -59,6 +66,9 @@ func (gc *Clu) GetAllHkAcc() (slc []*accessory.Accessory) {
 
 	for _, thermo := range gc.Therms {
 		slc = append(slc, thermo.hk.Accessory)
+	}
+	for _, sht := range gc.SimpleShutters {
+		slc = append(slc, sht.hk.Accessory)
 	}
 
 	return

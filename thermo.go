@@ -66,7 +66,7 @@ func (gt *Thermo) InitAll() {
 func (gt *Thermo) AppendHk() *accessory.Thermostat {
 	info := accessory.Info{
 		Name:         gt.Name,
-		SerialNumber: fmt.Sprintf("%d", gt.Id),
+		SerialNumber: fmt.Sprintf("%d", gt.Id),	
 		Manufacturer: "Grenton",
 		Model:        gt.Kind,
 		ID:           gt.GetLongId(),

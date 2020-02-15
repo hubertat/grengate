@@ -17,8 +17,10 @@ type ReqObject struct {
 	Cmd  	string `json:",omitempty"`
 	Source  string `json:",omitempty"`
 
-	Thermo *Thermo `json:",omitempty"`
-	Light  *Light  `json:",omitempty"`
+	Thermo 		*Thermo 	`json:",omitempty"`
+	Light  		*Light  	`json:",omitempty"`
+	Shutter		*Shutter  	`json:",omitempty"`
+	ShutterSimple		*ShutterSimple  	`json:",omitempty"`
 }
 
 type CluObject struct {
@@ -100,7 +102,9 @@ func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
 	gl.block.Lock()
 	defer gl.block.Unlock()
 
-	input.Cmd = "SET"
+	if input.Cmd == "" {
+		input.Cmd = "SET"	
+	}
 	jsonQ, _ := json.Marshal(input)
 	gl.clu.set.Debugf("SendReq: \nurl: %s\nquery: %s\n", gl.clu.set.GetSetPath(), jsonQ)
 	req, err := http.NewRequest("POST", gl.clu.set.GetSetPath(), bytes.NewBuffer(jsonQ))

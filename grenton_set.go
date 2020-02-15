@@ -164,7 +164,7 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("GrentonSet RequestAndUpdate http Client failed:\n%v", err)
 	}
 
 	defer resp.Body.Close()
