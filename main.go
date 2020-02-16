@@ -33,13 +33,14 @@ func main() {
 	info := accessory.Info{
 		Name: "grengate",
 		Manufacturer: "github.com/hubertat",
-		Firmware: "v0.3",
+		FirmwareRevision: "v0.3",
 		ID: 1,
 	}
-	bridge := accessory.NewSwitch(info)
+	bridge := accessory.NewBridge(info)
 	config := hc.Config{
 		Pin:     gren.HkPin,
 		SetupId: gren.HkSetupId,
+		StoragePath: "hk",
 	}
 	t, err := hc.NewIPTransport(config, bridge.Accessory, gren.GetAllHkAcc()...)
 	if err != nil {

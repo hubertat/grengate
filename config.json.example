@@ -23,6 +23,19 @@
 					"Id": 1234,
 					"Kind": "DOU",
 					"Name": "Light x"
+				},
+				{
+					"Id": 4321,
+					"Kind": "DOU",
+					"Name": "Light other"
+				}
+			],
+			"Therms": [
+				{
+					"Id": 7788,
+					"Kind": "THE",
+					"Name": "Thermo ABC",
+					"Source": "sensor_var"
 				}
 			]
 		},		
