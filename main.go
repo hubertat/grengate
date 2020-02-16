@@ -29,15 +29,19 @@ func main() {
 	gren.StartCycling()
 
 	log.Print("HomeKit init")
-	// create an accessory
-	info := accessory.Info{Name: "Lamp"}
-	ac := accessory.NewSwitch(info)
-
+	
+	info := accessory.Info{
+		Name: "grengate",
+		Manufacturer: "github.com/hubertat",
+		Firmware: "v0.3",
+		ID: 1,
+	}
+	bridge := accessory.NewSwitch(info)
 	config := hc.Config{
 		Pin:     gren.HkPin,
 		SetupId: gren.HkSetupId,
 	}
-	t, err := hc.NewIPTransport(config, ac.Accessory, gren.GetAllHkAcc()...)
+	t, err := hc.NewIPTransport(config, bridge.Accessory, gren.GetAllHkAcc()...)
 	if err != nil {
 		log.Panic(err)
 	}
