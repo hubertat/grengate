@@ -48,8 +48,8 @@ func (co *CluObject) GetMixedId() string {
 }
 
 func (co *CluObject) TestGrentonGate(ro ReqObject) bool {
-	co.block.Lock()
-	defer co.block.Unlock()
+	co.clu.block.Lock()
+	defer co.clu.block.Unlock()
 
 	jsonQ, err := json.Marshal(ro)
 	if err != nil {
@@ -84,23 +84,18 @@ func (co *CluObject) TestGrentonGate(ro ReqObject) bool {
 }
 
 func (co *CluObject) Update() error {
-
-	go co.clu.set.Refresh()
-
-	for ix := 0; ix < 500; ix++ {
-		if co.clu.set.CheckFreshness() {
-			return nil
-		}
-		time.Sleep(20 * time.Millisecond)
+	if co.clu.set.CheckFreshness() {
+		return nil
 	}
 
-	return fmt.Errorf("CluObject (%s|%s) Update error: GrentonSet Refresh timeout!\n", co.Name, co.GetMixedId())
+	return co.clu.set.RequestAndUpdate([]ReqObject{co.Req})
+
 }
 
 func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
 
-	gl.block.Lock()
-	defer gl.block.Unlock()
+	gl.clu.block.Lock()
+	defer gl.clu.block.Unlock()
 
 	if input.Cmd == "" {
 		input.Cmd = "SET"	

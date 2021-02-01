@@ -25,6 +25,38 @@ Of course other things are needed:
 
 ### grengate
 
+#### linux service
+
+Creating user for the service:
+```
+sudo useradd -r -s /bin/false grengate
+```
+
+Example config for linux/unix service using systemd (to put into `/etc/systemd/system`):
+
+```
+[Unit]
+Description=Grengate
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+User=grengate
+WorkingDirectory=/srv/grengate
+ExecStart=/srv/grengate/grengate -config /srv/grengate/config.json
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enabling service, so it will run on system startup:
+```
+sudo systemctl enable grengate
+```
+
 ### grenton GATE
 
 #### http listener

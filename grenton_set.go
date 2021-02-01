@@ -28,6 +28,7 @@ type GrentonSet struct {
 	CycleInSeconds  int
 	Verbose         bool
 	PerformAutotest bool
+	QueryLimit		int
 
 	lastUpdated   time.Time
 	freshDuration time.Duration
@@ -68,18 +69,22 @@ func (gs *GrentonSet) Config(path string) error {
 	}
 
 	confDuration, err := time.ParseDuration(fmt.Sprintf("%ds", gs.FreshInSeconds))
-	if gs.FreshInSeconds > 0 && err != nil {
+	if gs.FreshInSeconds > 0 && err == nil {
 		gs.freshDuration = confDuration
 	} else {
 		gs.Logf("GrentonSet Config: error parsing fresh duration from config, using default")
 		gs.freshDuration = 3 * time.Second
 	}
 	confDuration, err = time.ParseDuration(fmt.Sprintf("%ds", gs.CycleInSeconds))
-	if gs.CycleInSeconds > 0 && err != nil {
+	if gs.CycleInSeconds > 0 && err == nil {
 		gs.cycleDuration = confDuration
 	} else {
 		gs.Logf("GrentonSet Config: error parsing cycle duration from config, using default")
 		gs.cycleDuration = 10 * time.Second
+	}
+
+	if gs.QueryLimit == 0 {
+		gs.QueryLimit = 30
 	}
 	return nil
 }
@@ -115,25 +120,6 @@ func (gs *GrentonSet) Refresh() {
 		return
 	}
 	gs.waitingAnswer = true
-	err := gs.RequestAndUpdate()
-
-	if err != nil {
-		gs.Error((fmt.Errorf("GrentonSet [%v] Refresh: request failed: %v\n", &gs, err)))
-		gs.waitingAnswer = false
-		return
-	}
-
-	gs.lastUpdated = time.Now()
-	gs.waitingAnswer = false
-	gs.Debugf("GrentonSet [%v] Refresh finished\n", &gs)
-}
-
-// RequestAndUpdate collects all needed objects and make POST request to update state of objects
-func (gs *GrentonSet) RequestAndUpdate() error {
-	gs.Logf("GrentonSet RequestAndUpdate: started [%v]", &gs)
-
-	gs.block.Lock()
-	defer gs.block.Unlock()
 
 	query := []ReqObject{}
 	for _, clu := range gs.Clus {
@@ -148,6 +134,39 @@ func (gs *GrentonSet) RequestAndUpdate() error {
 			}
 		}
 	}
+
+	for ix := 0; ix * gs.QueryLimit < len(query); ix++ {
+
+		start := ix * gs.QueryLimit
+		stop := (ix + 1) * gs.QueryLimit
+		
+		gs.Debugf("GrentonSet Refresh doing pass from %d until %d.\n", start, stop)
+
+		if stop > len(query) {
+			stop = len(query)
+		}
+
+		err := gs.RequestAndUpdate(query[start:stop])
+
+		if err != nil {
+			gs.Error((fmt.Errorf("GrentonSet [%v] Refresh: request failed: %v\n", &gs, err)))
+			gs.waitingAnswer = false
+			return
+		}
+	}
+
+	gs.lastUpdated = time.Now()
+	gs.waitingAnswer = false
+	gs.Debugf("GrentonSet [%v] Refresh finished\n", &gs)
+}
+
+// RequestAndUpdate collects all needed objects and make POST request to update state of objects
+func (gs *GrentonSet) RequestAndUpdate(query []ReqObject) error {
+	gs.Logf("GrentonSet RequestAndUpdate: started [%v]", &gs)
+
+	gs.block.Lock()
+	defer gs.block.Unlock()
+
 
 	jsonQ, _ := json.Marshal(query)
 	gs.Logf("GrentonSet RequestAndUpdate: query prepared, size: %d", len(jsonQ))
