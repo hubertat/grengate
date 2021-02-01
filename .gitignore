@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-grengate
+grengate*
 grengate_v*
 config.json
 Lamp
