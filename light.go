@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/brutella/hc/accessory"
 )
 
@@ -31,8 +32,8 @@ func (gl *Light) LoadReqObject(obj ReqObject) error {
 func (gl *Light) InitAll() {
 	gl.Req = ReqObject{
 		Kind: "Light",
-		Clu: gl.clu.Id,
-		Id: gl.GetMixedId(),
+		Clu:  gl.clu.Id,
+		Id:   gl.GetMixedId(),
 
 		// Light: gl,
 	}
@@ -61,9 +62,9 @@ func (gl *Light) Sync() {
 
 func (gl *Light) Get() bool {
 
-	if gl.clu.set.CheckFreshness() {
-		return gl.State
-	}
+	// if gl.clu.set.CheckFreshness() {
+	// 	return gl.State
+	// }
 
 	err := gl.Update()
 	if err != nil {
@@ -80,13 +81,9 @@ func (gl *Light) Set(state bool) {
 
 	req := gl.Req
 	req.Light = gl
-	obj, err := gl.SendReq(req)
-	
+	_, err := gl.SendReq(req)
+
 	if err != nil {
-		return
+		gl.clu.set.Error(err)
 	}
-
-	gl.LoadReqObject(obj)
-
-	return
 }

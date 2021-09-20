@@ -1,19 +1,16 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	"net/http"
-	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
-	"sync"
+	"log"
 	"time"
 
 	"github.com/brutella/hc/accessory"
 )
 
-// GrentonSet is main struct representing settings and having child Clu structs 
+// GrentonSet is main struct representing settings and having child Clu structs
 type GrentonSet struct {
 	Host         string
 	ReadPath     string
@@ -28,14 +25,15 @@ type GrentonSet struct {
 	CycleInSeconds  int
 	Verbose         bool
 	PerformAutotest bool
-	QueryLimit		int
+	QueryLimit      int
 
 	lastUpdated   time.Time
 	freshDuration time.Duration
 	cycleDuration time.Duration
 	cycling       *time.Ticker
-	waitingAnswer bool
-	block         sync.Mutex
+
+	broker GateBroker
+	setter GateBroker
 }
 
 // Debugf logs info, when Verbose option is on
@@ -86,6 +84,15 @@ func (gs *GrentonSet) Config(path string) error {
 	if gs.QueryLimit == 0 {
 		gs.QueryLimit = 30
 	}
+
+	gs.broker = GateBroker{}
+	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration)
+	gs.broker.PostPath = gs.Host + gs.ReadPath
+
+	gs.setter = GateBroker{}
+	gs.setter.Init(gs, 3, 200*time.Millisecond)
+	gs.setter.PostPath = gs.GetSetPath()
+
 	return nil
 }
 
@@ -115,11 +122,6 @@ func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.Accessory) {
 
 // Refres is calling RequestAndUpdate function to get fresh values
 func (gs *GrentonSet) Refresh() {
-	if gs.waitingAnswer {
-		gs.Debugf("GrentonSet [%v] Refresh: already waiting for answer, skipping\n", &gs)
-		return
-	}
-	gs.waitingAnswer = true
 
 	query := []ReqObject{}
 	for _, clu := range gs.Clus {
@@ -135,28 +137,13 @@ func (gs *GrentonSet) Refresh() {
 		}
 	}
 
-	for ix := 0; ix * gs.QueryLimit < len(query); ix++ {
-
-		start := ix * gs.QueryLimit
-		stop := (ix + 1) * gs.QueryLimit
-		
-		gs.Debugf("GrentonSet Refresh doing pass from %d until %d.\n", start, stop)
-
-		if stop > len(query) {
-			stop = len(query)
-		}
-
-		err := gs.RequestAndUpdate(query[start:stop])
-
-		if err != nil {
-			gs.Error((fmt.Errorf("GrentonSet [%v] Refresh: request failed: %v\n", &gs, err)))
-			gs.waitingAnswer = false
-			return
-		}
+	objectsPending := gs.broker.Queue(nil, query...)
+	for len(objectsPending) > 0 {
+		objectsPending = gs.broker.Queue(nil, objectsPending...)
 	}
 
 	gs.lastUpdated = time.Now()
-	gs.waitingAnswer = false
+
 	gs.Debugf("GrentonSet [%v] Refresh finished\n", &gs)
 }
 
@@ -164,46 +151,14 @@ func (gs *GrentonSet) Refresh() {
 func (gs *GrentonSet) RequestAndUpdate(query []ReqObject) error {
 	gs.Logf("GrentonSet RequestAndUpdate: started [%v]", &gs)
 
-	gs.block.Lock()
-	defer gs.block.Unlock()
-
-
-	jsonQ, _ := json.Marshal(query)
-	gs.Logf("GrentonSet RequestAndUpdate: query prepared, size: %d", len(jsonQ))
-	gs.Debugf("GrentonSet RequestAndUpdate: json query:\n%s\n", jsonQ)
-	req, err := http.NewRequest("POST", gs.Host+gs.ReadPath, bytes.NewBuffer(jsonQ))
-	if err != nil {
-		return err
+	objectsPending := gs.broker.Queue(nil, query...)
+	for len(objectsPending) > 0 {
+		objectsPending = gs.broker.Queue(nil, objectsPending...)
 	}
+	return nil
+}
 
-	req.Header.Set("Content-Type", "application/json")
-
-	client := http.Client{
-		Timeout: 10 * time.Second,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("GrentonSet RequestAndUpdate http Client failed:\n%v", err)
-	}
-
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
-		log.Print(resp.Status)
-		return fmt.Errorf("Received non-success http response from grenton host.")
-	}
-
-	data := []ReqObject{}
-
-	bodyBytes, _ := ioutil.ReadAll(resp.Body)
-	bodyString := string(bodyBytes)
-	gs.Debugf("GrentonSet RequestAndUpdate: received body:\n%s\n", bodyString)
-
-	err = json.Unmarshal(bodyBytes, &data)
-	log.Printf("\n\n%+v\n", data)
-	if err != nil {
-		return err
-	}
-
+func (gs *GrentonSet) update(data []ReqObject) {
 	for _, object := range data {
 		switch object.Kind {
 		default:
@@ -228,8 +183,6 @@ func (gs *GrentonSet) RequestAndUpdate(query []ReqObject) error {
 			}
 		}
 	}
-
-	return nil
 }
 
 // FindThermo returns a Thermo object belonging to selected clu and with selected id
