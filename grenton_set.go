@@ -90,7 +90,7 @@ func (gs *GrentonSet) Config(path string) error {
 	gs.broker.PostPath = gs.Host + gs.ReadPath
 
 	gs.setter = GateBroker{}
-	gs.setter.Init(gs, 3, 200*time.Millisecond)
+	gs.setter.Init(gs, 1, 200*time.Millisecond)
 	gs.setter.PostPath = gs.GetSetPath()
 
 	return nil

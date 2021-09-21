@@ -85,11 +85,16 @@ func (gb *GateBroker) flushErrors(err error) {
 }
 
 func (gb *GateBroker) Flush() {
+	defer gb.emptyQueue()
 	gb.requesting.Lock()
 	defer gb.requesting.Unlock()
-	defer gb.emptyQueue()
 
-	jsonQ, _ := json.Marshal(gb.queue)
+	var jsonQ []byte
+	if gb.MaxQueueLength > 1 {
+		jsonQ, _ = json.Marshal(gb.queue)
+	} else {
+		jsonQ, _ = json.Marshal(gb.queue[0])
+	}
 	gb.u.Logf("GateBroker Flush: query prepared, count: %d, bytes: %d", len(gb.queue), len(jsonQ))
 	gb.u.Debugf("GateBroker Flush: json query:\n%s\n", jsonQ)
 	req, err := http.NewRequest("POST", gb.PostPath, bytes.NewBuffer(jsonQ))
