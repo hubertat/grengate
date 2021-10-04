@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,6 +21,10 @@ type ReqObject struct {
 	Light         *Light         `json:",omitempty"`
 	Shutter       *Shutter       `json:",omitempty"`
 	ShutterSimple *ShutterSimple `json:",omitempty"`
+}
+
+func (ro ReqObject) Equal(to ReqObject) bool {
+	return strings.EqualFold(ro.Clu, to.Clu) && strings.EqualFold(ro.Id, to.Id) && strings.EqualFold(ro.Kind, to.Kind) && strings.EqualFold(ro.Cmd, to.Cmd)
 }
 
 type CluObject struct {

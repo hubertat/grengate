@@ -34,6 +34,20 @@ func (gb *GateBroker) Init(u updater, maxLength int, flushPeriod time.Duration) 
 	gb.FlushPeriod = flushPeriod
 }
 
+func (gb *GateBroker) checkIfPresent(obj ReqObject) bool {
+	if len(gb.queue) == 0 {
+		return false
+	}
+
+	for _, q := range gb.queue {
+		if obj.Equal(q) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft []ReqObject) {
 	gb.working.Lock()
 	defer gb.working.Unlock()
@@ -54,13 +68,16 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 	defer gb.requesting.Unlock()
 
 	emptyQueue := (len(gb.queue) == 0)
+	objectsLeft = []ReqObject{}
 
-	if len(objects) > gb.spaceLeft() {
-		objectsToAppend := objects[:gb.spaceLeft()]
-		objectsLeft = objects[gb.spaceLeft():]
-		gb.queue = append(gb.queue, objectsToAppend...)
-	} else {
-		gb.queue = append(gb.queue, objects...)
+	for _, obj := range objects {
+		if !gb.checkIfPresent(obj) {
+			if gb.spaceLeft() > 0 {
+				gb.queue = append(gb.queue, obj)
+			} else {
+				objectsLeft = append(objectsLeft, obj)
+			}
+		}
 	}
 
 	if gb.spaceLeft() == 0 {
