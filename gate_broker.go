@@ -66,7 +66,7 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 	if gb.spaceLeft() == 0 {
 		go gb.Flush()
 	} else {
-		if emptyQueue {
+		if !emptyQueue {
 			time.AfterFunc(gb.FlushPeriod, gb.Flush)
 		}
 	}
