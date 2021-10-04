@@ -89,6 +89,11 @@ func (gb *GateBroker) Flush() {
 	gb.requesting.Lock()
 	defer gb.requesting.Unlock()
 
+	if len(gb.queue) == 0 {
+		gb.u.Logf("]![ GateBroker tried to flush on empty queue! Skipping!\n")
+		return
+	}
+
 	var jsonQ []byte
 	if gb.MaxQueueLength > 1 {
 		jsonQ, _ = json.Marshal(gb.queue)
