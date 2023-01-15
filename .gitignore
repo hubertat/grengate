@@ -11,6 +11,8 @@ Lamp
 Lamp/*
 hk
 hk/*
+.DS_Store
+../.DS_Store
 
 
 # Sublime configs
