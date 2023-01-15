@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/brutella/hc/accessory"
+	"github.com/brutella/hap/accessory"
 )
 
 // GrentonSet is main struct representing settings and having child Clu structs
@@ -18,8 +18,8 @@ type GrentonSet struct {
 
 	Clus []*Clu
 
-	HkPin     string
-	HkSetupId string
+	HkPin  string
+	HkPath string
 
 	FreshInSeconds  int
 	CycleInSeconds  int
@@ -110,8 +110,8 @@ func (gs *GrentonSet) GetSetPath() string {
 }
 
 // GetAllHkAcc returns a slice with every HomeKit Accessory pointer
-func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.Accessory) {
-	slc = []*accessory.Accessory{}
+func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.A) {
+	slc = []*accessory.A{}
 
 	for _, clu := range gs.Clus {
 		slc = append(slc, clu.GetAllHkAcc()...)
@@ -120,7 +120,7 @@ func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.Accessory) {
 	return
 }
 
-// Refres is calling RequestAndUpdate function to get fresh values
+// Refresh is calling RequestAndUpdate function to get fresh values
 func (gs *GrentonSet) Refresh() {
 
 	query := []ReqObject{}

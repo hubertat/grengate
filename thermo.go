@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/brutella/hc/accessory"
+
+	"github.com/brutella/hap/accessory"
 )
 
 type Thermo struct {
@@ -12,15 +13,15 @@ type Thermo struct {
 
 	hk *accessory.Thermostat `json:"-"`
 
-	TempCurrent, 
+	TempCurrent,
 	TempSetpoint,
 	TempTarget,
-	TempHoliday, 
-	TempMax, 
-	TempMin 	float64
-	
+	TempHoliday,
+	TempMax,
+	TempMin float64
+
 	Mode,
-	State                                              int
+	State int
 }
 
 func (gt *Thermo) GetHkState() (hkState int) {
@@ -55,36 +56,35 @@ func (gt *Thermo) LoadReqObject(obj ReqObject) error {
 
 func (gt *Thermo) InitAll() {
 	gt.Req = ReqObject{
-		Kind: "Thermo",
-		Clu: gt.clu.Id,
-		Id: gt.GetMixedId(),
+		Kind:   "Thermo",
+		Clu:    gt.clu.Id,
+		Id:     gt.GetMixedId(),
 		Source: gt.Source,
-
 	}
 	gt.AppendHk()
 }
 func (gt *Thermo) AppendHk() *accessory.Thermostat {
 	info := accessory.Info{
 		Name:         gt.Name,
-		SerialNumber: fmt.Sprintf("%d", gt.Id),	
+		SerialNumber: fmt.Sprintf("%d", gt.Id),
 		Manufacturer: "Grenton",
 		Model:        gt.Kind,
-		ID:           gt.GetLongId(),
 	}
 
-	gt.hk = accessory.NewThermostat(info, 20, 15, 30, 0.1)
+	gt.hk = accessory.NewThermostat(info)
+	gt.hk.Id = gt.GetLongId()
 
 	gt.hk.Thermostat.TargetHeatingCoolingState.OnValueRemoteUpdate(gt.SetState)
 	gt.hk.Thermostat.TargetTemperature.OnValueRemoteUpdate(gt.SetTemperature)
 	// gt.hk.Thermostat.CurrentTemperature.OnValueRemoteGet(gt.GetTemperature)
 	// gt.hk.Thermostat.CurrentHeatingCoolingState.OnValueRemoteGet(gt.GetState)
 
-	gt.clu.set.Logf("HK Thermostat added (id: %x, type: %d", gt.hk.Accessory.ID, gt.hk.Accessory.Type)
+	gt.clu.set.Logf("HK Thermostat added (id: %x, type: %d", gt.hk.A.Id, gt.hk.A.Type)
 	return gt.hk
 }
 
 func (gt *Thermo) Sync() {
-	
+
 	gt.hk.Thermostat.CurrentTemperature.SetValue(gt.TempCurrent)
 	gt.hk.Thermostat.TargetTemperature.SetValue(gt.TempTarget)
 	gt.hk.Thermostat.CurrentHeatingCoolingState.SetValue(gt.GetHkState())
@@ -152,7 +152,7 @@ func (gt *Thermo) SetState(state int) {
 	req := gt.Req
 	req.Thermo = gt
 	obj, err := gt.SendReq(req)
-	
+
 	if err != nil {
 		gt.clu.set.Error(fmt.Errorf("Thermo SetState: %w", err))
 		return

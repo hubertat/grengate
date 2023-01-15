@@ -6,16 +6,16 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/brutella/hc/accessory"
+	"github.com/brutella/hap/accessory"
 )
 
 type Clu struct {
-	Id     string
-	Name   string
+	Id   string
+	Name string
 
-	Lights []*Light
-	Therms []*Thermo
-	Shutters []*Shutter
+	Lights         []*Light
+	Therms         []*Thermo
+	Shutters       []*Shutter
 	SimpleShutters []*ShutterSimple
 
 	set   *GrentonSet
@@ -57,18 +57,18 @@ func (gc *Clu) InitAll() {
 	}
 }
 
-func (gc *Clu) GetAllHkAcc() (slc []*accessory.Accessory) {
-	slc = []*accessory.Accessory{}
+func (gc *Clu) GetAllHkAcc() (slc []*accessory.A) {
+	slc = []*accessory.A{}
 
 	for _, light := range gc.Lights {
-		slc = append(slc, light.hk.Accessory)
+		slc = append(slc, light.hk.A)
 	}
 
 	for _, thermo := range gc.Therms {
-		slc = append(slc, thermo.hk.Accessory)
+		slc = append(slc, thermo.hk.A)
 	}
 	for _, sht := range gc.SimpleShutters {
-		slc = append(slc, sht.hk.Accessory)
+		slc = append(slc, sht.hk.A)
 	}
 
 	return

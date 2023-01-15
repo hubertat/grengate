@@ -3,25 +3,24 @@ package main
 import (
 	"fmt"
 
-	"github.com/brutella/hc/accessory"
+	"github.com/brutella/hap/accessory"
 )
 
 type ShutterSimple struct {
 	CluObject
 
-	hk					*accessory.Switch
+	hk *accessory.Switch
 
 	// State: 0 - stopped; 1 - going up; 2 - going down
-	State				int		
-	MaxTime				int
+	State   int
+	MaxTime int
 }
 
 func (sh *ShutterSimple) InitAll() {
 	sh.Req = ReqObject{
 		Kind: "Shutter",
-		Clu: sh.clu.Id,
-		Id: sh.GetMixedId(),
-
+		Clu:  sh.clu.Id,
+		Id:   sh.GetMixedId(),
 	}
 	sh.AppendHk()
 }
@@ -31,21 +30,20 @@ func (sh *ShutterSimple) AppendHk() {
 		SerialNumber: fmt.Sprintf("%d", sh.Id),
 		Manufacturer: "Grenton",
 		Model:        sh.Kind,
-		ID:           sh.GetLongId(),
 	}
 
 	sh.hk = accessory.NewSwitch(info)
+	sh.hk.Id = sh.GetLongId()
 
 	sh.hk.Switch.On.OnValueRemoteUpdate(sh.SetPosition)
-	
-	sh.clu.set.Logf("HK Switch added (id: %x | type %x)", sh.hk.Accessory.ID, sh.hk.Accessory.Type)
-}
 
+	sh.clu.set.Logf("HK Switch added (id: %x | type %x)", sh.hk.A.Id, sh.hk.A.Type)
+}
 
 // SetPosition check which direction should move and call StartMoving func
 func (sh *ShutterSimple) SetPosition(open bool) {
 	sh.hk.Switch.On.SetValue(open)
-	
+
 	go sh.StartMoving(open)
 }
 
@@ -85,8 +83,7 @@ func (sh *ShutterSimple) LoadReqObject(obj ReqObject) error {
 	return nil
 }
 
-
 // Sync for compatibility
 func (sh *ShutterSimple) Sync() {
-	
+
 }

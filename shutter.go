@@ -3,34 +3,34 @@ package main
 import (
 	"fmt"
 	"time"
-	"github.com/brutella/hc/accessory"
-	"github.com/brutella/hc/service"
-	"github.com/brutella/hc/characteristic"
+
+	"github.com/brutella/hap/accessory"
+	"github.com/brutella/hap/characteristic"
+	"github.com/brutella/hap/service"
 )
 
 type ShutterAccessory struct {
-	*accessory.Accessory
+	*accessory.A
 
-	WindowCovering			*service.WindowCovering
+	WindowCovering *service.WindowCovering
 }
 type Shutter struct {
 	CluObject
 
-	hk					ShutterAccessory
-	
-	position			int
+	hk ShutterAccessory
+
+	position int
 
 	// State: 0 - stopped; 1 - going up; 2 - going down
-	State				int		
-	MaxTime				int
+	State   int
+	MaxTime int
 }
 
 func (sh *Shutter) InitAll() {
 	sh.Req = ReqObject{
 		Kind: "Shutter",
-		Clu: sh.clu.Id,
-		Id: sh.GetMixedId(),
-
+		Clu:  sh.clu.Id,
+		Id:   sh.GetMixedId(),
 	}
 	sh.AppendHk()
 }
@@ -40,21 +40,20 @@ func (sh *Shutter) AppendHk() {
 		SerialNumber: fmt.Sprintf("%d", sh.Id),
 		Manufacturer: "Grenton",
 		Model:        sh.Kind,
-		ID:           sh.GetLongId(),
 	}
 
 	sh.hk = ShutterAccessory{}
-	sh.hk.Accessory = accessory.New(info, accessory.TypeWindowCovering)
+	sh.hk.Id = sh.GetLongId()
+
+	sh.hk.A = accessory.New(info, accessory.TypeWindowCovering)
 	sh.hk.WindowCovering = service.NewWindowCovering()
 	sh.hk.WindowCovering.CurrentPosition.SetValue(0)
 	sh.hk.WindowCovering.TargetPosition.SetValue(0)
 	sh.hk.WindowCovering.PositionState.SetValue(characteristic.PositionStateStopped)
 
-
 	sh.hk.WindowCovering.TargetPosition.OnValueRemoteUpdate(sh.SetPosition)
 
-	
-	sh.clu.set.Logf("HK WindowCovering added (id: %x)", sh.hk.Accessory.ID)
+	sh.clu.set.Logf("HK WindowCovering added (id: %x)", sh.hk.A.Id)
 }
 
 // GetHkState returns windows covering state in HomeKit characteristic format
@@ -78,7 +77,7 @@ func (sh *Shutter) Sync() {
 // SetPosition check which direction should move and call StartMoving func
 func (sh *Shutter) SetPosition(target int) {
 	sh.hk.WindowCovering.TargetPosition.SetValue(target)
-	
+
 	go sh.StartMoving(target > sh.position)
 }
 
@@ -102,14 +101,14 @@ func (sh *Shutter) StartMoving(up bool) {
 	var increment, period int
 
 	period = sh.MaxTime / 100
-	
+
 	if up {
 		increment = 1
 	} else {
 		increment = -1
 	}
 
-	for ; sh.position % 100 != 0; sh.position = sh.position + increment {
+	for ; sh.position%100 != 0; sh.position = sh.position + increment {
 		time.Sleep(time.Duration(period) * time.Millisecond)
 		sh.Sync()
 	}
