@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const httpReadTimeout = 10 * time.Second
+
 type GateBroker struct {
 	FlushPeriod    time.Duration
 	MaxQueueLength int
@@ -129,7 +131,7 @@ func (gb *GateBroker) Flush() {
 	req.Header.Set("Content-Type", "application/json")
 
 	client := http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: httpReadTimeout,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -140,7 +142,7 @@ func (gb *GateBroker) Flush() {
 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
-		gb.flushErrors(fmt.Errorf("GateBroker received non-success http response from grenton host: ", resp.Status))
+		gb.flushErrors(fmt.Errorf("GateBroker received non-success http response from grenton host: %s", resp.Status))
 		gb.u.Logf("GateBroker received non-success http response from grenton host: ", resp.Status)
 		return
 	}
