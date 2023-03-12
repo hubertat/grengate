@@ -49,8 +49,13 @@ func main() {
 
 	log.Print("HomeKit init")
 
+	bridgeName := gren.BridgeName
+	if len(bridgeName) == 0 {
+		bridgeName = "grengate"
+	}
+
 	info := accessory.Info{
-		Name:         "grengate",
+		Name:         bridgeName,
 		Manufacturer: "github.com/hubertat",
 		Firmware:     grengateVer,
 	}

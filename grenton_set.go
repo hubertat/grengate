@@ -16,6 +16,8 @@ type GrentonSet struct {
 	ReadPath     string
 	SetLightPath string
 
+	BridgeName string
+
 	Clus []*Clu
 
 	HkPin  string

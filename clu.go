@@ -57,8 +57,7 @@ func (gc *Clu) InitAll() {
 		sht.InitAll()
 	}
 	for _, mos := range gc.MotionSensors {
-		mos.clu = gc
-		mos.InitAll()
+		mos.Init(gc)
 	}
 }
 
@@ -76,7 +75,7 @@ func (gc *Clu) GetAllHkAcc() (slc []*accessory.A) {
 		slc = append(slc, sht.hk.A)
 	}
 	for _, mos := range gc.MotionSensors {
-		slc = append(slc, mos.hkAccessory)
+		slc = append(slc, mos.GetA())
 	}
 
 	return

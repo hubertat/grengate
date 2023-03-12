@@ -24,26 +24,32 @@ type MotionSensor struct {
 	hkFault     *characteristic.StatusFault
 }
 
-func (ms *MotionSensor) InitAll() {
+func (ms *MotionSensor) Init(clu *Clu) *accessory.A {
+	ms.clu = clu
+
 	ms.Req = ReqObject{
 		Kind: "MotionSensor",
 		Clu:  ms.clu.Id,
 		Id:   ms.GetMixedId(),
 	}
-	ms.AppendHk()
+	return ms.appendHk()
 }
 
-func (ms *MotionSensor) AppendHk() *accessory.A {
+func (ms *MotionSensor) GetA() *accessory.A {
+	return ms.hkAccessory
+}
+
+func (ms *MotionSensor) appendHk() *accessory.A {
 	info := accessory.Info{
 		Name:         ms.Name,
 		SerialNumber: fmt.Sprintf("%d", ms.Id),
-		Model:        ms.Kind,
+		// Model:        ms.Kind,
 	}
 
 	ms.hkAccessory = accessory.New(info, accessory.TypeSensor)
 	ms.hkService = service.NewMotionSensor()
 	ms.hkFault = characteristic.NewStatusFault()
-	ms.hkFault.SetValue(characteristic.StatusFaultGeneralFault)
+	ms.hkFault.SetValue(characteristic.StatusFaultNoFault)
 
 	ms.hkService.AddC(ms.hkFault.C)
 	ms.hkAccessory.AddS(ms.hkService.S)
