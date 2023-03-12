@@ -21,6 +21,7 @@ type ReqObject struct {
 	Light         *Light         `json:",omitempty"`
 	Shutter       *Shutter       `json:",omitempty"`
 	ShutterSimple *ShutterSimple `json:",omitempty"`
+	MotionSensor  *MotionSensor  `json:",omitempty"`
 }
 
 func (ro ReqObject) Equal(to ReqObject) bool {

@@ -26,6 +26,7 @@ type GrentonSet struct {
 	Verbose         bool
 	PerformAutotest bool
 	QueryLimit      int
+	InputServerPort int
 
 	lastUpdated   time.Time
 	freshDuration time.Duration
@@ -34,6 +35,7 @@ type GrentonSet struct {
 
 	broker GateBroker
 	setter GateBroker
+	input  InputServer
 }
 
 // Debugf logs info, when Verbose option is on

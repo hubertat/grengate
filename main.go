@@ -3,6 +3,7 @@ package main
 import (
 	// "fmt"
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -13,29 +14,38 @@ import (
 	"github.com/pkg/errors"
 )
 
-const grengateVer = "v0.5"
+const grengateVer = "v0.6-rc"
 
 func main() {
 	log.Print("Starting grengate")
 
 	ctx := context.Background()
 
-	configPath := "./config.json"
+	configPath := flag.String("config", "./config.json", "config file path")
+	performAutotest := flag.Bool("do-autotest", false, "perform an autotest on startup")
+	flag.Parse()
+
 	gren := GrentonSet{}
-	err := gren.Config(configPath)
+	err := gren.Config(*configPath)
 	if err != nil {
 		log.Fatalf("GrentonSet Config failed: %v", err)
 	}
 
 	gren.InitClus()
 
-	if gren.PerformAutotest {
+	if gren.PerformAutotest || *performAutotest {
 		log.Print("Testing all Grenton elements")
 		gren.TestAllGrentonGate()
 	}
 
-	log.Print("Starting update cycles")
+	log.Println("Starting update cycles")
 	gren.StartCycling()
+
+	log.Printf("Starting input server (listening on port %d)\n", gren.InputServerPort)
+	grentonIn := NewInputServer(&gren, gren.InputServerPort)
+	go func() {
+		log.Fatal(grentonIn.Run())
+	}()
 
 	log.Print("HomeKit init")
 
