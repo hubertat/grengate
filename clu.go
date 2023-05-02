@@ -13,11 +13,10 @@ type Clu struct {
 	Id   string
 	Name string
 
-	Lights         []*Light
-	Therms         []*Thermo
-	Shutters       []*Shutter
-	SimpleShutters []*ShutterSimple
-	MotionSensors  []*MotionSensor
+	Lights        []*Light
+	Therms        []*Thermo
+	Shutters      []*Shutter
+	MotionSensors []*MotionSensor
 
 	set   *GrentonSet
 	block sync.Mutex
@@ -52,12 +51,12 @@ func (gc *Clu) InitAll() {
 		thermo.clu = gc
 		thermo.InitAll()
 	}
-	for _, sht := range gc.SimpleShutters {
-		sht.clu = gc
-		sht.InitAll()
-	}
 	for _, mos := range gc.MotionSensors {
 		mos.Init(gc)
+	}
+	for _, sht := range gc.Shutters {
+		sht.clu = gc
+		sht.InitAll()
 	}
 }
 
@@ -71,11 +70,11 @@ func (gc *Clu) GetAllHkAcc() (slc []*accessory.A) {
 	for _, thermo := range gc.Therms {
 		slc = append(slc, thermo.hk.A)
 	}
-	for _, sht := range gc.SimpleShutters {
-		slc = append(slc, sht.hk.A)
-	}
 	for _, mos := range gc.MotionSensors {
 		slc = append(slc, mos.GetA())
+	}
+	for _, sht := range gc.Shutters {
+		slc = append(slc, sht.hk.A)
 	}
 
 	return

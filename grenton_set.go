@@ -139,6 +139,11 @@ func (gs *GrentonSet) Refresh() {
 				query = append(query, thermo.Req)
 			}
 		}
+		for _, sht := range clu.Shutters {
+			if sht != nil {
+				query = append(query, sht.Req)
+			}
+		}
 	}
 
 	objectsPending := gs.broker.Queue(nil, query...)
@@ -185,6 +190,15 @@ func (gs *GrentonSet) update(data []ReqObject) {
 					gs.Error(fmt.Errorf("GrentonSet RequestAndUpdate loading (%s|%s) failed: %w", object.Clu, object.Id, err))
 				}
 			}
+		case "Shutter":
+			shutter, err := gs.FindShutter(object.Clu, object.Id)
+			if err == nil {
+				gs.Debugf("GrentonSet RequestAndUpdate: found shutter from request, state: %+v\n", object)
+				err = shutter.LoadReqObject(object)
+				if err != nil {
+					gs.Error(fmt.Errorf("GrentonSet RequestAndUpdate loading (%s|%s) failed: %w", object.Clu, object.Id, err))
+				}
+			}
 		}
 	}
 }
@@ -222,6 +236,24 @@ func (gs *GrentonSet) FindLight(fClu, fLight string) (found *Light, err error) {
 		}
 	}
 	err = fmt.Errorf("Light not found [clu: %s id: %s]", fLight, fClu)
+	return
+}
+
+// FindShutter returns a Shutter object belnging to selected clu
+func (gs *GrentonSet) FindShutter(fClu, fShutter string) (found *Shutter, err error) {
+	gs.Debugf("GrentonSet FindShutter: Looking for shutter: in %s id: %s\n", fShutter, fClu)
+	for _, clu := range gs.Clus {
+		if clu.GetMixedId() == fClu {
+			for _, sht := range clu.Shutters {
+				if sht.GetMixedId() == fShutter && sht != nil {
+					found = sht
+					err = nil
+					return
+				}
+			}
+		}
+	}
+	err = fmt.Errorf("Shutter not found [clu: %s id: %s]", fShutter, fClu)
 	return
 }
 

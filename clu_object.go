@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -17,11 +16,10 @@ type ReqObject struct {
 	Cmd    string `json:",omitempty"`
 	Source string `json:",omitempty"`
 
-	Thermo        *Thermo        `json:",omitempty"`
-	Light         *Light         `json:",omitempty"`
-	Shutter       *Shutter       `json:",omitempty"`
-	ShutterSimple *ShutterSimple `json:",omitempty"`
-	MotionSensor  *MotionSensor  `json:",omitempty"`
+	Thermo       *Thermo       `json:",omitempty"`
+	Light        *Light        `json:",omitempty"`
+	Shutter      *Shutter      `json:",omitempty"`
+	MotionSensor *MotionSensor `json:",omitempty"`
 }
 
 func (ro ReqObject) Equal(to ReqObject) bool {
@@ -35,11 +33,13 @@ type CluObject struct {
 
 	Req ReqObject `json:"-"`
 
-	clu   *Clu       `json:"-"`
-	block sync.Mutex `json:"-"`
+	clu *Clu `json:"-"`
 }
 
 func (co *CluObject) GetLongId() uint64 {
+	if co.clu == nil {
+		panic("CluObject GetLongId() called, but clu not set.")
+	}
 	return (uint64(co.clu.GetIntId()) << 32) + uint64(co.Id)
 }
 
