@@ -1,15 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 type GrentonInput interface {
-	SetOn()
+	Set(bool)
 }
 
 type InputServer struct {
@@ -18,38 +20,36 @@ type InputServer struct {
 }
 
 func (is *InputServer) HandleRequest(w http.ResponseWriter, r *http.Request) {
-	if !strings.EqualFold(r.Header.Get("Content-Type"), "multipart/form-data") {
-		http.Error(w, "Unsupported Media Type, expected multipart/form-data", http.StatusUnsupportedMediaType)
+	is.gSet.Debugf("input server handling request from host: %s\n", r.Host)
+
+	if !strings.EqualFold(r.Header.Get("Content-Type"), "application/json") {
+		http.Error(w, "unsupported Media Type, expected application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 
-	clu := r.FormValue("clu")
-	id, convErr := strconv.Atoi(r.FormValue("id"))
-	if convErr != nil {
-		http.Error(w, "failed to convert string id to int", http.StatusBadRequest)
+	type input struct {
+		Clu   string
+		Id    string
+		State bool
+	}
+
+	inputPayload := &input{}
+
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(inputPayload)
+	if err != nil {
+		is.gSet.Error(errors.Wrapf(err, "failed to decode request body from host: %s", r.Host))
 		return
 	}
 
-	foundInput := false
-	var gInput GrentonInput
-
-	for _, gSetClu := range is.gSet.Clus {
-		if strings.EqualFold(gSetClu.Id, clu) {
-			for _, gMotionSensor := range gSetClu.MotionSensors {
-				if id == int(gMotionSensor.Id) {
-					foundInput = true
-					gInput = gMotionSensor
-				}
-			}
-		}
-	}
-
-	if !foundInput {
-		http.Error(w, "clu/id combination not found", http.StatusNotFound)
+	sensor, err := is.gSet.FindMotionSensor(inputPayload.Clu, inputPayload.Id)
+	if err != nil {
+		is.gSet.Error(err)
 		return
 	}
 
-	gInput.SetOn()
+	sensor.Set(inputPayload.State)
+
 	w.WriteHeader(http.StatusOK)
 }
 

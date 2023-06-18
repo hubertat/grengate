@@ -41,11 +41,15 @@ func main() {
 	log.Println("Starting update cycles")
 	gren.StartCycling()
 
-	log.Printf("Starting input server (listening on port %d)\n", gren.InputServerPort)
-	grentonIn := NewInputServer(&gren, gren.InputServerPort)
-	go func() {
-		log.Fatal(grentonIn.Run())
-	}()
+	if gren.InputServerPort > 0 {
+		log.Printf("Starting input server (listening on port %d)\n", gren.InputServerPort)
+		grentonIn := NewInputServer(&gren, gren.InputServerPort)
+		go func() {
+			log.Fatal(grentonIn.Run())
+		}()
+	} else {
+		log.Println("Input server disabled")
+	}
 
 	log.Print("HomeKit init")
 

@@ -47,6 +47,8 @@ func (ms *MotionSensor) appendHk() *accessory.A {
 	}
 
 	ms.hkAccessory = accessory.New(info, accessory.TypeSensor)
+	ms.hkAccessory.Id = ms.GetLongId()
+
 	ms.hkService = service.NewMotionSensor()
 	ms.hkFault = characteristic.NewStatusFault()
 	ms.hkFault.SetValue(characteristic.StatusFaultNoFault)
@@ -54,6 +56,8 @@ func (ms *MotionSensor) appendHk() *accessory.A {
 	ms.hkService.AddC(ms.hkFault.C)
 	ms.hkAccessory.AddS(ms.hkService.S)
 	ms.hkService.MotionDetected.SetValue(false)
+
+	ms.clu.set.Logf("HK MotionSensor added (id: %x)", ms.hkAccessory.Id)
 
 	return ms.hkAccessory
 }
@@ -78,4 +82,21 @@ func (ms *MotionSensor) SetOn() {
 			}
 		}
 	}()
+}
+
+// LoadReqObject checks object received from http request end reads it into MotionSensor
+func (ms *MotionSensor) LoadReqObject(obj ReqObject) error {
+	if obj.Kind != "MotionSensor" {
+		return fmt.Errorf("MotionSensor LoadReqObject: wrong object kind (%s)", obj.Kind)
+	}
+
+	if obj.MotionSensor == nil {
+		return fmt.Errorf("MotionSensor LoadReqObject: missing MotionSensor object")
+	}
+
+	ms.clu.set.Debugf("MotionSensor LoadReqObject loading: \n%+v", obj)
+
+	ms.Set(obj.MotionSensor.State)
+
+	return nil
 }

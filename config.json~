@@ -1,0 +1,36 @@
+{
+	"HkPin": "40004000",
+	"HkPath": "hk",
+
+	"Host": "http://10.100.81.73/",
+	"ReadPath": "multi/read/",
+	"SetLightPath": "homebridge",
+	"FreshInSeconds": 5,
+	"Verbose": true,
+	"PerformAutotest": false,
+
+	"Clus": [
+		{
+			"Id": "CLU_0d1cf087",
+			"Name": "salon",
+			"Shutters": [
+				{
+					"Id":5552,
+					"Kind":"ZWA",
+					"Name":"okno zachod"
+				}
+			]
+		},
+		{
+			"Id": "CLU_0d1cf030",
+			"Name": "rwent",
+                        "MotionSensors": [
+                        	{
+					"Id": 2881,
+					"Kind": "DIN",
+					"Name": "czujka, korytarz SN"
+				}
+                        ]
+                }
+	]
+}
