@@ -7,7 +7,6 @@
 grengate*
 grengate_v*
 config.json
-
 Lamp
 Lamp/*
 hk
@@ -29,8 +28,3 @@ sftp-config.json
 # vendor/
 
 config.json~
-
-release
-release/**
-bin
-bin/**
