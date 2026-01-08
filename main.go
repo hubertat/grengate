@@ -4,6 +4,7 @@ import (
 	// "fmt"
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -14,7 +15,12 @@ import (
 	"github.com/pkg/errors"
 )
 
-const grengateVer = "v0.6-rc"
+// Version information (set via ldflags during build)
+var (
+	Version   = "dev"     // Git tag or version
+	GitCommit = "unknown" // Git commit hash
+	BuildDate = "unknown" // Build timestamp
+)
 
 func main() {
 	log.Print("Starting grengate")
@@ -23,7 +29,16 @@ func main() {
 
 	configPath := flag.String("config", "./config.json", "config file path")
 	performAutotest := flag.Bool("do-autotest", false, "perform an autotest on startup")
+	showVersion := flag.Bool("version", false, "Show version information and exit")
 	flag.Parse()
+
+	// Show version and exit if requested
+	if *showVersion {
+		fmt.Printf("blesrv %s\n", Version)
+		fmt.Printf("Git Commit: %s\n", GitCommit)
+		fmt.Printf("Build Date: %s\n", BuildDate)
+		return
+	}
 
 	gren := GrentonSet{}
 	err := gren.Config(*configPath)
@@ -61,7 +76,8 @@ func main() {
 	info := accessory.Info{
 		Name:         bridgeName,
 		Manufacturer: "github.com/hubertat",
-		Firmware:     grengateVer,
+		Model:        "grengate",
+		Firmware:     Version,
 	}
 	bridge := accessory.NewBridge(info)
 	bridge.Id = 1
