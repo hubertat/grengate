@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/brutella/hc/accessory"
+	"github.com/brutella/hap/accessory"
 )
 
 type Light struct {
@@ -11,7 +11,7 @@ type Light struct {
 
 	State bool
 
-	hk *accessory.Lightbulb `json:"-"`
+	hk *accessory.Lightbulb
 }
 
 func (gl *Light) LoadReqObject(obj ReqObject) error {
@@ -45,14 +45,15 @@ func (gl *Light) AppendHk() *accessory.Lightbulb {
 		SerialNumber: fmt.Sprintf("%d", gl.Id),
 		Manufacturer: "Grenton",
 		Model:        gl.Kind,
-		ID:           gl.GetLongId(),
 	}
 
 	gl.hk = accessory.NewLightbulb(info)
-	gl.hk.Lightbulb.On.OnValueRemoteUpdate(gl.Set)
-	gl.hk.Lightbulb.On.OnValueRemoteGet(gl.Get)
+	gl.hk.Id = gl.GetLongId()
 
-	gl.clu.set.Logf("HK Lightbulb added (id: %x, type: %d", gl.hk.Accessory.ID, gl.hk.Accessory.Type)
+	gl.hk.Lightbulb.On.OnValueRemoteUpdate(gl.Set)
+	// gl.hk.Lightbulb.On.OnValueRemoteGet(gl.Get)
+
+	gl.clu.set.Logf("HK Lightbulb added (id: %x, type: %d", gl.hk.A.Id, gl.hk.A.Type)
 	return gl.hk
 }
 

@@ -5,21 +5,26 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"strings"
 	"time"
 
-	"github.com/brutella/hc/accessory"
+	"github.com/brutella/hap/accessory"
+	"github.com/pkg/errors"
 )
 
 // GrentonSet is main struct representing settings and having child Clu structs
 type GrentonSet struct {
-	Host         string
-	ReadPath     string
-	SetLightPath string
+	Host            string
+	ReadPath        string
+	SetLightPath    string
+	InputServerPort int
+
+	BridgeName string
 
 	Clus []*Clu
 
-	HkPin     string
-	HkSetupId string
+	HkPin  string
+	HkPath string
 
 	FreshInSeconds  int
 	CycleInSeconds  int
@@ -85,6 +90,10 @@ func (gs *GrentonSet) Config(path string) error {
 		gs.QueryLimit = 30
 	}
 
+	if gs.HkPath == "" {
+		gs.HkPath = "hk"
+	}
+
 	gs.broker = GateBroker{}
 	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration)
 	gs.broker.PostPath = gs.Host + gs.ReadPath
@@ -110,8 +119,8 @@ func (gs *GrentonSet) GetSetPath() string {
 }
 
 // GetAllHkAcc returns a slice with every HomeKit Accessory pointer
-func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.Accessory) {
-	slc = []*accessory.Accessory{}
+func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.A) {
+	slc = []*accessory.A{}
 
 	for _, clu := range gs.Clus {
 		slc = append(slc, clu.GetAllHkAcc()...)
@@ -120,7 +129,7 @@ func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.Accessory) {
 	return
 }
 
-// Refres is calling RequestAndUpdate function to get fresh values
+// Refresh is calling RequestAndUpdate function to get fresh values
 func (gs *GrentonSet) Refresh() {
 
 	query := []ReqObject{}
@@ -133,6 +142,16 @@ func (gs *GrentonSet) Refresh() {
 		for _, thermo := range clu.Therms {
 			if thermo != nil {
 				query = append(query, thermo.Req)
+			}
+		}
+		for _, sht := range clu.Shutters {
+			if sht != nil {
+				query = append(query, sht.Req)
+			}
+		}
+		for _, mosens := range clu.MotionSensors {
+			if mosens != nil {
+				query = append(query, mosens.Req)
 			}
 		}
 	}
@@ -160,27 +179,41 @@ func (gs *GrentonSet) RequestAndUpdate(query []ReqObject) error {
 
 func (gs *GrentonSet) update(data []ReqObject) {
 	for _, object := range data {
+		var err error
 		switch object.Kind {
 		default:
 			gs.Logf("GrentonSet RequestAndUpdate: unmatched object kind: %s\n", object.Kind)
 		case "Light":
-			light, err := gs.FindLight(object.Clu, object.Id)
+			var light *Light
+			light, err = gs.FindLight(object.Clu, object.Id)
 			if err == nil {
 				gs.Debugf("GrentonSet RequestAndUpdate: found light from request, state: %+v\n", object)
 				err = light.LoadReqObject(object)
-				if err != nil {
-					gs.Error(fmt.Errorf("GrentonSet RequestAndUpdate loading (%s|%s) failed: %w", object.Clu, object.Id, err))
-				}
 			}
 		case "Thermo":
-			thermo, err := gs.FindThermo(object.Clu, object.Id)
+			var thermo *Thermo
+			thermo, err = gs.FindThermo(object.Clu, object.Id)
 			if err == nil {
 				gs.Debugf("GrentonSet RequestAndUpdate: found thermo from request, state: %+v\n", object)
 				err = thermo.LoadReqObject(object)
-				if err != nil {
-					gs.Error(fmt.Errorf("GrentonSet RequestAndUpdate loading (%s|%s) failed: %w", object.Clu, object.Id, err))
-				}
 			}
+		case "Shutter":
+			var shutter *Shutter
+			shutter, err = gs.FindShutter(object.Clu, object.Id)
+			if err == nil {
+				gs.Debugf("GrentonSet RequestAndUpdate: found shutter from request, state: %+v\n", object)
+				err = shutter.LoadReqObject(object)
+			}
+		case "MotionSensor":
+			var sensor *MotionSensor
+			sensor, err = gs.FindMotionSensor(object.Clu, object.Id)
+			if err == nil {
+				gs.Debugf("GrentonSet RequestAndUpdate: found motion sensor from request, state: %v\n", object)
+				err = sensor.LoadReqObject(object)
+			}
+		}
+		if err != nil {
+			gs.Error(errors.Wrapf(err, "RequestAndUpdate loading [%s|%s] failed.", object.Clu, object.Id))
 		}
 	}
 }
@@ -219,6 +252,39 @@ func (gs *GrentonSet) FindLight(fClu, fLight string) (found *Light, err error) {
 	}
 	err = fmt.Errorf("Light not found [clu: %s id: %s]", fLight, fClu)
 	return
+}
+
+// FindShutter returns a Shutter object belnging to selected clu
+func (gs *GrentonSet) FindShutter(fClu, fShutter string) (found *Shutter, err error) {
+	gs.Debugf("GrentonSet FindShutter: Looking for shutter: in %s id: %s\n", fShutter, fClu)
+	for _, clu := range gs.Clus {
+		if clu.GetMixedId() == fClu {
+			for _, sht := range clu.Shutters {
+				if sht.GetMixedId() == fShutter && sht != nil {
+					found = sht
+					err = nil
+					return
+				}
+			}
+		}
+	}
+	err = fmt.Errorf("Shutter not found [clu: %s id: %s]", fShutter, fClu)
+	return
+}
+
+// FindMotionSensor returns a MotionSensor object from selected clu and with provided id
+func (gs *GrentonSet) FindMotionSensor(fClu, fSensor string) (*MotionSensor, error) {
+	gs.Debugf("GrentonSet FindMotionSensor: Looking for sensor in clu %s with id %s\n", fClu, fSensor)
+	for _, clu := range gs.Clus {
+		if strings.EqualFold(clu.GetMixedId(), fClu) {
+			for _, sens := range clu.MotionSensors {
+				if strings.EqualFold(sens.GetMixedId(), fSensor) && sens != nil {
+					return sens, nil
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("sensor not found [clu: %s id: %s]", fClu, fSensor)
 }
 
 // CheckFreshness checks if time passed from last refresh is greater than set treshold
