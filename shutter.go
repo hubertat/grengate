@@ -126,8 +126,9 @@ func (sh *Shutter) SetPosition(target int) {
 		sh.clu.set.Error(err)
 		return
 	}
-	if sh.looping {
+	if sh.looping || period <= 0 {
 		sh.cancelMovement <- true
+		return
 	}
 	sh.clu.set.Debugf("Shutter starting move ticker period: %s\n", period.String())
 	sh.moveTicker = time.NewTicker(period)
