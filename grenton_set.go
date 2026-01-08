@@ -90,6 +90,10 @@ func (gs *GrentonSet) Config(path string) error {
 		gs.QueryLimit = 30
 	}
 
+	if gs.HkPath == "" {
+		gs.HkPath = "hk"
+	}
+
 	gs.broker = GateBroker{}
 	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration)
 	gs.broker.PostPath = gs.Host + gs.ReadPath
