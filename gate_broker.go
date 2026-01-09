@@ -23,8 +23,9 @@ type GateBroker struct {
 	working    sync.Mutex
 	requesting sync.Mutex
 
-	telemetry *Telemetry
-	isSetter  bool
+	telemetry      *Telemetry
+	influxReporter *InfluxReporter
+	isSetter       bool
 }
 
 type updater interface {
@@ -33,11 +34,12 @@ type updater interface {
 	Debugf(string, ...interface{})
 }
 
-func (gb *GateBroker) Init(u updater, maxLength int, flushPeriod time.Duration, telemetry *Telemetry, isSetter bool) {
+func (gb *GateBroker) Init(u updater, maxLength int, flushPeriod time.Duration, telemetry *Telemetry, influxReporter *InfluxReporter, isSetter bool) {
 	gb.u = u
 	gb.MaxQueueLength = maxLength
 	gb.FlushPeriod = flushPeriod
 	gb.telemetry = telemetry
+	gb.influxReporter = influxReporter
 	gb.isSetter = isSetter
 }
 
@@ -145,12 +147,16 @@ func (gb *GateBroker) Flush() {
 		gb.u.Logf("New POST reques failed: ", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
+		cluId, objectId := gb.getCluAndObjectId()
 		if gb.telemetry != nil {
 			if gb.isSetter {
 				gb.telemetry.RecordSetterFlush(elapsed, objectCount, err)
 			} else {
 				gb.telemetry.RecordFlush(elapsed, objectCount, err)
 			}
+		}
+		if gb.influxReporter != nil {
+			gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, err)
 		}
 		return
 	}
@@ -166,12 +172,16 @@ func (gb *GateBroker) Flush() {
 		gb.u.Logf("GateBroker RequestAndUpdate http Client failed:\n%v", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
+		cluId, objectId := gb.getCluAndObjectId()
 		if gb.telemetry != nil {
 			if gb.isSetter {
 				gb.telemetry.RecordSetterFlush(elapsed, objectCount, err)
 			} else {
 				gb.telemetry.RecordFlush(elapsed, objectCount, err)
 			}
+		}
+		if gb.influxReporter != nil {
+			gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, err)
 		}
 		return
 	}
@@ -183,12 +193,16 @@ func (gb *GateBroker) Flush() {
 		gb.u.Logf("GateBroker received non-success http response from grenton host: ", resp.Status)
 		// Record failed flush
 		elapsed := time.Since(startTime)
+		cluId, objectId := gb.getCluAndObjectId()
 		if gb.telemetry != nil {
 			if gb.isSetter {
 				gb.telemetry.RecordSetterFlush(elapsed, objectCount, statusErr)
 			} else {
 				gb.telemetry.RecordFlush(elapsed, objectCount, statusErr)
 			}
+		}
+		if gb.influxReporter != nil {
+			gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, statusErr)
 		}
 		return
 	}
@@ -205,6 +219,7 @@ func (gb *GateBroker) Flush() {
 		gb.u.Logf("Unmarshal data error: ", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
+		cluId, objectId := gb.getCluAndObjectId()
 		if gb.telemetry != nil {
 			if gb.isSetter {
 				gb.telemetry.RecordSetterFlush(elapsed, objectCount, err)
@@ -212,17 +227,24 @@ func (gb *GateBroker) Flush() {
 				gb.telemetry.RecordFlush(elapsed, objectCount, err)
 			}
 		}
+		if gb.influxReporter != nil {
+			gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, err)
+		}
 		return
 	}
 
 	// Record successful flush
 	elapsed := time.Since(startTime)
+	cluId, objectId := gb.getCluAndObjectId()
 	if gb.telemetry != nil {
 		if gb.isSetter {
 			gb.telemetry.RecordSetterFlush(elapsed, objectCount, nil)
 		} else {
 			gb.telemetry.RecordFlush(elapsed, objectCount, nil)
 		}
+	}
+	if gb.influxReporter != nil {
+		gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, nil)
 	}
 
 	gb.u.Logf("GateBroker Flush: completed %d objects in %dms", objectCount, elapsed.Milliseconds())
@@ -232,4 +254,14 @@ func (gb *GateBroker) Flush() {
 
 func (gb *GateBroker) spaceLeft() int {
 	return gb.MaxQueueLength - len(gb.queue)
+}
+
+// getCluAndObjectId extracts CLU and object IDs from queue (for single-object operations)
+func (gb *GateBroker) getCluAndObjectId() (string, string) {
+	// Only return IDs if single object in queue (typical for setter/write operations)
+	if len(gb.queue) == 1 {
+		return gb.queue[0].Clu, gb.queue[0].Id
+	}
+	// Multiple objects or empty queue - return empty strings
+	return "", ""
 }

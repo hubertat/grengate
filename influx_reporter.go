@@ -44,14 +44,16 @@ func NewInfluxReporter(cfg InfluxConfig) *InfluxReporter {
 }
 
 // ReportQueueMetrics sends queue operation metrics to InfluxDB
-func (ir *InfluxReporter) ReportQueueMetrics(added, rejected, duplicates int64) {
+func (ir *InfluxReporter) ReportQueueMetrics(added, rejected, duplicates int64, brokerType string) {
 	if !ir.enabled {
 		return
 	}
 
-	p := influxdb2.NewPoint("queue",
+	p := influxdb2.NewPoint("grengate_telemetry",
 		map[string]string{
-			"component": "gate_broker",
+			"operation":   "queue",
+			"component":   "gate_broker",
+			"broker_type": brokerType, // "read" or "write"
 		},
 		map[string]interface{}{
 			"added":      added,
@@ -64,7 +66,7 @@ func (ir *InfluxReporter) ReportQueueMetrics(added, rejected, duplicates int64) 
 }
 
 // ReportFlushMetrics sends flush operation metrics to InfluxDB
-func (ir *InfluxReporter) ReportFlushMetrics(objectCount int, durationMs int64, isWrite bool, err error) {
+func (ir *InfluxReporter) ReportFlushMetrics(objectCount int, durationMs int64, isWrite bool, cluId, objectId string, err error) {
 	if !ir.enabled {
 		return
 	}
@@ -74,18 +76,28 @@ func (ir *InfluxReporter) ReportFlushMetrics(objectCount int, durationMs int64, 
 		success = 0
 	}
 
-	measurementName := "flush"
+	brokerType := "read"
 	if isWrite {
-		measurementName = "setter_flush"
+		brokerType = "write"
 	}
 
-	p := influxdb2.NewPoint(measurementName,
-		map[string]string{
-			"component": "gate_broker",
-		},
+	tags := map[string]string{
+		"operation":   "flush",
+		"component":   "gate_broker",
+		"broker_type": brokerType,
+	}
+
+	// Add CLU and object IDs only if single object (write operations typically)
+	if cluId != "" && objectId != "" {
+		tags["clu_id"] = cluId
+		tags["object_id"] = objectId
+	}
+
+	p := influxdb2.NewPoint("grengate_telemetry",
+		tags,
 		map[string]interface{}{
-			"object_count": objectCount,
 			"duration_ms":  durationMs,
+			"object_count": objectCount,
 			"success":      success,
 		},
 		time.Now())
@@ -94,19 +106,30 @@ func (ir *InfluxReporter) ReportFlushMetrics(objectCount int, durationMs int64, 
 }
 
 // ReportCommandMetrics sends command operation metrics to InfluxDB
-func (ir *InfluxReporter) ReportCommandMetrics(totalMs, queueWaitMs int64) {
+func (ir *InfluxReporter) ReportCommandMetrics(totalMs, queueWaitMs int64, cluId, objectId string) {
 	if !ir.enabled {
 		return
 	}
 
 	httpMs := totalMs - queueWaitMs
 
-	p := influxdb2.NewPoint("command",
-		map[string]string{
-			"component": "command",
-		},
+	tags := map[string]string{
+		"operation": "command",
+		"component": "command",
+	}
+
+	// Add CLU and object IDs for command tracking
+	if cluId != "" {
+		tags["clu_id"] = cluId
+	}
+	if objectId != "" {
+		tags["object_id"] = objectId
+	}
+
+	p := influxdb2.NewPoint("grengate_telemetry",
+		tags,
 		map[string]interface{}{
-			"total_ms":      totalMs,
+			"duration_ms":   totalMs,
 			"queue_wait_ms": queueWaitMs,
 			"http_ms":       httpMs,
 		},
@@ -121,15 +144,16 @@ func (ir *InfluxReporter) ReportRefreshMetrics(objectCount, changedCount, skippe
 		return
 	}
 
-	p := influxdb2.NewPoint("refresh",
+	p := influxdb2.NewPoint("grengate_telemetry",
 		map[string]string{
+			"operation": "refresh",
 			"component": "grenton_set",
 		},
 		map[string]interface{}{
-			"total_objects":   objectCount,
+			"duration_ms":     durationMs,
+			"object_count":    objectCount,
 			"changed_objects": changedCount,
 			"skipped_objects": skippedCount,
-			"duration_ms":     durationMs,
 		},
 		time.Now())
 

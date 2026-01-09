@@ -126,11 +126,13 @@ func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
 		gl.clu.set.influxReporter.ReportCommandMetrics(
 			totalDuration.Milliseconds(),
 			queueWaitDuration.Milliseconds(),
+			gl.clu.GetMixedId(),
+			gl.GetMixedId(),
 		)
 	}
 
-	gl.clu.set.Debugf("SendReq: total=%dms, queueWait=%dms",
-		totalDuration.Milliseconds(), queueWaitDuration.Milliseconds())
+	gl.clu.set.Debugf("SendReq: total=%dms, queueWait=%dms, clu=%s, object=%s",
+		totalDuration.Milliseconds(), queueWaitDuration.Milliseconds(), gl.clu.GetMixedId(), gl.GetMixedId())
 
 	return
 

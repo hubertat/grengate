@@ -105,13 +105,13 @@ func (gs *GrentonSet) Config(path string) error {
 	// Initialize InfluxDB reporter
 	gs.influxReporter = NewInfluxReporter(gs.InfluxDB)
 
-	// Initialize brokers with telemetry
+	// Initialize brokers with telemetry and InfluxDB reporter
 	gs.broker = GateBroker{}
-	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration, gs.telemetry, false)
+	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration, gs.telemetry, gs.influxReporter, false)
 	gs.broker.PostPath = gs.Host + gs.ReadPath
 
 	gs.setter = GateBroker{}
-	gs.setter.Init(gs, 1, 200*time.Millisecond, gs.telemetry, true)
+	gs.setter.Init(gs, 1, 200*time.Millisecond, gs.telemetry, gs.influxReporter, true)
 	gs.setter.PostPath = gs.GetSetPath()
 
 	return nil
