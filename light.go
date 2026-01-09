@@ -79,6 +79,7 @@ func (gl *Light) Get() bool {
 func (gl *Light) Set(state bool) {
 
 	gl.State = state
+	gl.clu.set.Debugf("Light.Set() called: %s/%s -> %v", gl.clu.GetMixedId(), gl.GetMixedId(), state)
 
 	req := gl.Req
 	req.Light = gl
@@ -87,4 +88,5 @@ func (gl *Light) Set(state bool) {
 	if err != nil {
 		gl.clu.set.Error(err)
 	}
+	gl.clu.set.Debugf("Light.Set() completed: %s/%s", gl.clu.GetMixedId(), gl.GetMixedId())
 }

@@ -108,6 +108,8 @@ func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
 		input.Cmd = "SET"
 	}
 
+	gl.clu.set.Debugf("SendReq: calling Queue for %s/%s (Kind=%s)", input.Clu, input.Id, input.Kind)
+
 	errors := make(chan error)
 
 	// Time when we start queueing
