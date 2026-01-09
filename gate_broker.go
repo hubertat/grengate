@@ -133,13 +133,15 @@ func (gb *GateBroker) Flush() {
 	}
 
 	objectCount := len(gb.queue)
+	cluCount := gb.countUniqueCLUs()
 	var jsonQ []byte
 	if gb.MaxQueueLength > 1 {
 		jsonQ, _ = json.Marshal(gb.queue)
 	} else {
 		jsonQ, _ = json.Marshal(gb.queue[0])
 	}
-	gb.u.Logf("GateBroker Flush: query prepared, count: %d, bytes: %d", objectCount, len(jsonQ))
+	requestBytes := len(jsonQ)
+	gb.u.Logf("GateBroker Flush: query prepared, count: %d, clus: %d, bytes: %d", objectCount, cluCount, requestBytes)
 	gb.u.Debugf("GateBroker Flush: json query:\n%s\n", jsonQ)
 	req, err := http.NewRequest("POST", gb.PostPath, bytes.NewBuffer(jsonQ))
 	if err != nil {
@@ -156,7 +158,7 @@ func (gb *GateBroker) Flush() {
 			}
 		}
 		if gb.influxReporter != nil {
-			gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, err)
+			gb.influxReporter.ReportFlushMetrics(objectCount, cluCount, requestBytes, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, err)
 		}
 		return
 	}
@@ -181,7 +183,7 @@ func (gb *GateBroker) Flush() {
 			}
 		}
 		if gb.influxReporter != nil {
-			gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, err)
+			gb.influxReporter.ReportFlushMetrics(objectCount, cluCount, requestBytes, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, err)
 		}
 		return
 	}
@@ -202,7 +204,7 @@ func (gb *GateBroker) Flush() {
 			}
 		}
 		if gb.influxReporter != nil {
-			gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, statusErr)
+			gb.influxReporter.ReportFlushMetrics(objectCount, cluCount, requestBytes, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, statusErr)
 		}
 		return
 	}
@@ -228,7 +230,7 @@ func (gb *GateBroker) Flush() {
 			}
 		}
 		if gb.influxReporter != nil {
-			gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, err)
+			gb.influxReporter.ReportFlushMetrics(objectCount, cluCount, requestBytes, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, err)
 		}
 		return
 	}
@@ -244,10 +246,10 @@ func (gb *GateBroker) Flush() {
 		}
 	}
 	if gb.influxReporter != nil {
-		gb.influxReporter.ReportFlushMetrics(objectCount, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, nil)
+		gb.influxReporter.ReportFlushMetrics(objectCount, cluCount, requestBytes, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, nil)
 	}
 
-	gb.u.Logf("GateBroker Flush: completed %d objects in %dms", objectCount, elapsed.Milliseconds())
+	gb.u.Logf("GateBroker Flush: completed %d objects, %d CLUs in %dms", objectCount, cluCount, elapsed.Milliseconds())
 	gb.u.update(data)
 
 }
@@ -264,4 +266,13 @@ func (gb *GateBroker) getCluAndObjectId() (string, string) {
 	}
 	// Multiple objects or empty queue - return empty strings
 	return "", ""
+}
+
+// countUniqueCLUs returns the number of unique CLUs in the queue
+func (gb *GateBroker) countUniqueCLUs() int {
+	cluMap := make(map[string]bool)
+	for _, obj := range gb.queue {
+		cluMap[obj.Clu] = true
+	}
+	return len(cluMap)
 }

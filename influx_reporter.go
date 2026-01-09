@@ -66,7 +66,7 @@ func (ir *InfluxReporter) ReportQueueMetrics(added, rejected, duplicates int64, 
 }
 
 // ReportFlushMetrics sends flush operation metrics to InfluxDB
-func (ir *InfluxReporter) ReportFlushMetrics(objectCount int, durationMs int64, isWrite bool, cluId, objectId string, err error) {
+func (ir *InfluxReporter) ReportFlushMetrics(objectCount, cluCount, requestBytes int, durationMs int64, isWrite bool, cluId, objectId string, err error) {
 	if !ir.enabled {
 		return
 	}
@@ -96,9 +96,11 @@ func (ir *InfluxReporter) ReportFlushMetrics(objectCount int, durationMs int64, 
 	p := influxdb2.NewPoint("grengate_telemetry",
 		tags,
 		map[string]interface{}{
-			"duration_ms":  durationMs,
-			"object_count": objectCount,
-			"success":      success,
+			"duration_ms":   durationMs,
+			"object_count":  objectCount,
+			"clu_count":     cluCount,
+			"request_bytes": requestBytes,
+			"success":       success,
 		},
 		time.Now())
 
