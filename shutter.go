@@ -181,11 +181,9 @@ func (sh *Shutter) sendCmd(cmd shutterCmd) error {
 		req.Cmd = "STOP"
 	}
 
-	// ignoring returned object - cmd endpoint not working correctly
-	// status will be updated on next refresh
-	// obj, err := sh.SendReq(req)
-	_, err := sh.SendReq(req)
-	return err
+	// Use async send to allow command batching
+	sh.SendReqAsync(req)
+	return nil
 }
 
 // LoadReqObject checks object received from http request end reads it into Shutter

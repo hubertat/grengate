@@ -83,10 +83,11 @@ func (gl *Light) Set(state bool) {
 
 	req := gl.Req
 	req.Light = gl
-	_, err := gl.SendReq(req)
 
-	if err != nil {
-		gl.clu.set.Error(err)
-	}
-	gl.clu.set.Debugf("Light.Set() completed: %s/%s", gl.clu.GetMixedId(), gl.GetMixedId())
+	// Use async send to allow command batching
+	// Returns immediately so HomeKit can call other devices
+	// Commands accumulate in queue and batch together
+	gl.SendReqAsync(req)
+
+	gl.clu.set.Debugf("Light.Set() returning immediately (queued async)")
 }

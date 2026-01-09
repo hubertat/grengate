@@ -141,7 +141,24 @@ func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
 		totalDuration.Milliseconds(), queueWaitDuration.Milliseconds(), gl.clu.GetMixedId(), gl.GetMixedId())
 
 	return
+}
 
+// SendReqAsync queues a command without waiting for flush to complete
+// This allows commands to batch together for better performance
+// Use this for HomeKit Set() callbacks where immediate response is not needed
+func (gl *CluObject) SendReqAsync(input ReqObject) {
+	if input.Cmd == "" {
+		input.Cmd = "SET"
+	}
+
+	gl.clu.set.Debugf("SendReqAsync: queueing %s/%s (Kind=%s) without waiting", input.Clu, input.Id, input.Kind)
+
+	// Queue command with nil error channel = don't wait for completion
+	gl.clu.set.setter.Queue(nil, input)
+}
+
+// Commented out old blocking code for reference
+func oldSendReq() {
 	// gl.clu.block.Lock()
 	// defer gl.clu.block.Unlock()
 
