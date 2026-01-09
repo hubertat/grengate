@@ -105,20 +105,24 @@ if req ~= nil then
 
 				if rl.Kind == "Light" then
 					SetLight(rl.Clu, rl.Id, rl.Light)
-					-- Return what we set instead of reading back (eliminates race condition)
-					singleResp.Light = rl.Light
+					-- Return minimal structure matching ReadLight format
+					singleResp.Light = {State = rl.Light.State}
 				end
 
 				if rl.Kind == "Thermo" then
 					SetThermo(rl.Clu, rl.Id, rl.Thermo)
-					-- Return what we set instead of reading back (eliminates race condition)
-					singleResp.Thermo = rl.Thermo
+					-- Return minimal structure with fields we set
+					singleResp.Thermo = {
+						TempSetpoint = rl.Thermo.TempSetpoint,
+						State = rl.Thermo.State,
+						Mode = rl.Thermo.Mode
+					}
 				end
 
 				if rl.Kind == "Shutter" then
 					SetShutter(rl.Clu, rl.Id, rl.Cmd)
-					-- For shutter, we don't have state to return, omit response
-					-- grengate will get state on next refresh cycle
+					-- Return minimal structure
+					singleResp.Shutter = {State = 0}  -- Placeholder, real state from next refresh
 				end
 
 				return singleResp
@@ -149,20 +153,24 @@ if req ~= nil then
 
 				if req.Kind == "Light" then
 					SetLight(req.Clu, req.Id, req.Light)
-					-- Return what we set instead of reading back (eliminates race condition)
-					singleResp.Light = req.Light
+					-- Return minimal structure matching ReadLight format
+					singleResp.Light = {State = req.Light.State}
 				end
 
 				if req.Kind == "Thermo" then
 					SetThermo(req.Clu, req.Id, req.Thermo)
-					-- Return what we set instead of reading back (eliminates race condition)
-					singleResp.Thermo = req.Thermo
+					-- Return minimal structure with fields we set
+					singleResp.Thermo = {
+						TempSetpoint = req.Thermo.TempSetpoint,
+						State = req.Thermo.State,
+						Mode = req.Thermo.Mode
+					}
 				end
 
 				if req.Kind == "Shutter" then
 					SetShutter(req.Clu, req.Id, req.Cmd)
-					-- For shutter, we don't have state to return, omit response
-					-- grengate will get state on next refresh cycle
+					-- Return minimal structure
+					singleResp.Shutter = {State = 0}  -- Placeholder, real state from next refresh
 				end
 
 				return singleResp
