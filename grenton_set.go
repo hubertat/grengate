@@ -32,6 +32,9 @@ type GrentonSet struct {
 	PerformAutotest bool
 	QueryLimit      int
 
+	SetterQueueSize int // Write batch size (default: 5, old: 1)
+	SetterFlushMs   int // Write flush period in ms (default: 50, old: 200)
+
 	InfluxDB InfluxConfig
 
 	lastUpdated   time.Time
@@ -99,6 +102,14 @@ func (gs *GrentonSet) Config(path string) error {
 		gs.HkPath = "hk"
 	}
 
+	// Stage 3: Write path optimization defaults
+	if gs.SetterQueueSize == 0 {
+		gs.SetterQueueSize = 5 // Allow batching up to 5 write operations
+	}
+	if gs.SetterFlushMs == 0 {
+		gs.SetterFlushMs = 50 // Flush after 50ms for low latency
+	}
+
 	// Initialize telemetry
 	gs.telemetry = &Telemetry{lastReset: time.Now()}
 
@@ -111,7 +122,8 @@ func (gs *GrentonSet) Config(path string) error {
 	gs.broker.PostPath = gs.Host + gs.ReadPath
 
 	gs.setter = GateBroker{}
-	gs.setter.Init(gs, 1, 200*time.Millisecond, gs.telemetry, gs.influxReporter, true)
+	setterFlushPeriod := time.Duration(gs.SetterFlushMs) * time.Millisecond
+	gs.setter.Init(gs, gs.SetterQueueSize, setterFlushPeriod, gs.telemetry, gs.influxReporter, true)
 	gs.setter.PostPath = gs.GetSetPath()
 
 	return nil
