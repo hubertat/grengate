@@ -84,6 +84,11 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 	objectsLeft = []ReqObject{}
 	usedFirstSlot := false
 
+	// Debug logging for setter (write operations)
+	if gb.isSetter {
+		gb.u.Debugf("%s Queue: incoming=%d, current_queue=%d, emptyQueue=%v", gb.opType(), len(objects), len(gb.queue), emptyQueue)
+	}
+
 	for _, obj := range objects {
 		// Try to get a slot
 		// First object uses the slot we already acquired above (blocking)
@@ -131,9 +136,19 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 
 	// Trigger flush (still holding queueLock, but that's OK - just checking length)
 	if len(gb.queue) >= gb.MaxQueueLength {
+		if gb.isSetter {
+			gb.u.Debugf("%s Queue: queue full (%d), triggering immediate flush", gb.opType(), len(gb.queue))
+		}
 		go gb.Flush()
 	} else if emptyQueue {
+		if gb.isSetter {
+			gb.u.Debugf("%s Queue: was empty, starting %dms timer (queue now has %d)", gb.opType(), gb.FlushPeriod.Milliseconds(), len(gb.queue))
+		}
 		time.AfterFunc(gb.FlushPeriod, gb.Flush)
+	} else {
+		if gb.isSetter {
+			gb.u.Debugf("%s Queue: added to existing queue (size=%d), timer already running", gb.opType(), len(gb.queue))
+		}
 	}
 
 	return
