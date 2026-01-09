@@ -23,6 +23,9 @@ type GateBroker struct {
 	working    sync.Mutex
 	requesting sync.Mutex
 
+	queueSpace chan struct{}   // Channel-based queue capacity management
+	queueMap   map[string]bool // O(1) duplicate checking
+
 	telemetry      *Telemetry
 	influxReporter *InfluxReporter
 	isSetter       bool
@@ -41,21 +44,16 @@ func (gb *GateBroker) Init(u updater, maxLength int, flushPeriod time.Duration, 
 	gb.telemetry = telemetry
 	gb.influxReporter = influxReporter
 	gb.isSetter = isSetter
+
+	// Initialize channel-based queue management
+	gb.queueSpace = make(chan struct{}, maxLength)
+	// Fill channel with available slots
+	for i := 0; i < maxLength; i++ {
+		gb.queueSpace <- struct{}{}
+	}
+	gb.queueMap = make(map[string]bool)
 }
 
-func (gb *GateBroker) checkIfPresent(obj ReqObject) bool {
-	if len(gb.queue) == 0 {
-		return false
-	}
-
-	for _, q := range gb.queue {
-		if obj.Equal(q) {
-			return true
-		}
-	}
-
-	return false
-}
 
 func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft []ReqObject) {
 	gb.working.Lock()
@@ -65,54 +63,84 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 		return
 	}
 
-	for gb.spaceLeft() == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if cErr != nil {
-		gb.cErrors = append(gb.cErrors, cErr)
-	}
-
-	gb.requesting.Lock()
-	defer gb.requesting.Unlock()
-
-	emptyQueue := (len(gb.queue) == 0)
 	objectsLeft = []ReqObject{}
+	objectsQueued := 0
 
 	for _, obj := range objects {
-		if !gb.checkIfPresent(obj) {
-			if gb.spaceLeft() > 0 {
-				gb.queue = append(gb.queue, obj)
-				if gb.telemetry != nil {
-					gb.telemetry.RecordQueueAdd()
-				}
-			} else {
-				objectsLeft = append(objectsLeft, obj)
-				if gb.telemetry != nil {
-					gb.telemetry.RecordQueueReject()
-				}
+		// Try to acquire queue space with timeout
+		select {
+		case <-gb.queueSpace:
+			// Got space, proceed with queueing
+		case <-time.After(1 * time.Second):
+			// Queue full for 1s, reject this object
+			objectsLeft = append(objectsLeft, obj)
+			if gb.telemetry != nil {
+				gb.telemetry.RecordQueueReject()
 			}
-		} else {
-			// Record duplicate
+			continue
+		}
+
+		// Check for duplicate using O(1) map lookup
+		key := obj.getKey()
+		if gb.queueMap[key] {
+			// Duplicate found, return space and skip
+			gb.queueSpace <- struct{}{}
 			if gb.telemetry != nil {
 				gb.telemetry.RecordQueueDuplicate()
 			}
+			continue
+		}
+
+		// Not a duplicate, add to queue
+		gb.requesting.Lock()
+		gb.queue = append(gb.queue, obj)
+		gb.queueMap[key] = true
+		gb.requesting.Unlock()
+
+		objectsQueued++
+		if gb.telemetry != nil {
+			gb.telemetry.RecordQueueAdd()
 		}
 	}
 
-	if gb.spaceLeft() == 0 {
-		go gb.Flush()
-	} else {
-		if !emptyQueue {
-			time.AfterFunc(gb.FlushPeriod, gb.Flush)
-		}
+	// Only add error channel if we successfully queued at least one object
+	if objectsQueued > 0 && cErr != nil {
+		gb.requesting.Lock()
+		gb.cErrors = append(gb.cErrors, cErr)
+		gb.requesting.Unlock()
 	}
+
+	// Check if we should trigger flush
+	gb.requesting.Lock()
+	queueLen := len(gb.queue)
+	gb.requesting.Unlock()
+
+	if queueLen >= gb.MaxQueueLength {
+		// Queue is full, flush immediately
+		go gb.Flush()
+	} else if queueLen == objectsQueued {
+		// Queue was empty before, schedule flush after period
+		time.AfterFunc(gb.FlushPeriod, gb.Flush)
+	}
+
 	return
 }
 
 func (gb *GateBroker) emptyQueue() {
+	// Save queue length before clearing
+	flushedCount := len(gb.queue)
+
+	// Clear queue and errors
 	gb.queue = []ReqObject{}
 	gb.cErrors = []chan error{}
+
+	// Return space to channel for flushed items
+	for i := 0; i < flushedCount; i++ {
+		gb.queueSpace <- struct{}{}
+	}
+
+	// Clear duplicate tracking map
+	gb.queueMap = make(map[string]bool)
 }
 
 func (gb *GateBroker) flushErrors(err error) {
@@ -254,9 +282,6 @@ func (gb *GateBroker) Flush() {
 
 }
 
-func (gb *GateBroker) spaceLeft() int {
-	return gb.MaxQueueLength - len(gb.queue)
-}
 
 // getCluAndObjectId extracts CLU and object IDs from queue (for single-object operations)
 func (gb *GateBroker) getCluAndObjectId() (string, string) {

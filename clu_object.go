@@ -26,6 +26,10 @@ func (ro ReqObject) Equal(to ReqObject) bool {
 	return strings.EqualFold(ro.Clu, to.Clu) && strings.EqualFold(ro.Id, to.Id) && strings.EqualFold(ro.Kind, to.Kind) && strings.EqualFold(ro.Cmd, to.Cmd)
 }
 
+func (ro ReqObject) getKey() string {
+	return fmt.Sprintf("%s:%s:%s", ro.Clu, ro.Id, ro.Kind)
+}
+
 type CluObject struct {
 	Id   uint32
 	Name string
