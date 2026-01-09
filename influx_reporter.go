@@ -76,15 +76,15 @@ func (ir *InfluxReporter) ReportFlushMetrics(objectCount, cluCount, requestBytes
 		success = 0
 	}
 
-	brokerType := "read"
+	// Choose measurement based on operation type
+	measurementName := "grengate_refresh"
 	if isWrite {
-		brokerType = "write"
+		measurementName = "grengate_command"
 	}
 
 	tags := map[string]string{
-		"operation":   "flush",
-		"component":   "gate_broker",
-		"broker_type": brokerType,
+		"operation": "flush",
+		"component": "gate_broker",
 	}
 
 	// Add CLU and object IDs only if single object (write operations typically)
@@ -93,7 +93,7 @@ func (ir *InfluxReporter) ReportFlushMetrics(objectCount, cluCount, requestBytes
 		tags["object_id"] = objectId
 	}
 
-	p := influxdb2.NewPoint("grengate_telemetry",
+	p := influxdb2.NewPoint(measurementName,
 		tags,
 		map[string]interface{}{
 			"duration_ms":   durationMs,
@@ -116,7 +116,7 @@ func (ir *InfluxReporter) ReportCommandMetrics(totalMs, queueWaitMs int64, cluId
 	httpMs := totalMs - queueWaitMs
 
 	tags := map[string]string{
-		"operation": "command",
+		"operation": "command_endtoend",
 		"component": "command",
 	}
 
@@ -128,7 +128,7 @@ func (ir *InfluxReporter) ReportCommandMetrics(totalMs, queueWaitMs int64, cluId
 		tags["object_id"] = objectId
 	}
 
-	p := influxdb2.NewPoint("grengate_telemetry",
+	p := influxdb2.NewPoint("grengate_command",
 		tags,
 		map[string]interface{}{
 			"duration_ms":   totalMs,
@@ -146,9 +146,9 @@ func (ir *InfluxReporter) ReportRefreshMetrics(objectCount, changedCount, skippe
 		return
 	}
 
-	p := influxdb2.NewPoint("grengate_telemetry",
+	p := influxdb2.NewPoint("grengate_refresh",
 		map[string]string{
-			"operation": "refresh",
+			"operation": "refresh_cycle",
 			"component": "grenton_set",
 		},
 		map[string]interface{}{
