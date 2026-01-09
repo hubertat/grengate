@@ -102,11 +102,10 @@ func (gs *GrentonSet) Config(path string) error {
 		gs.HkPath = "hk"
 	}
 
-	// Stage 3: Write path optimization defaults
-	// NOTE: SetterQueueSize must stay at 1 until Stage 6 (Lua script optimization)
-	// The Grenton update-script.lua only handles single objects, not arrays
+	// Stage 3 + Stage 6: Write path optimization with batch support
+	// update-script.lua now supports both single objects and arrays
 	if gs.SetterQueueSize == 0 {
-		gs.SetterQueueSize = 1 // Must be 1 - Grenton Lua doesn't support batch writes yet
+		gs.SetterQueueSize = 5 // Allow batching up to 5 write operations
 	}
 	if gs.SetterFlushMs == 0 {
 		gs.SetterFlushMs = 50 // Flush after 50ms for lower latency (was 200ms)
