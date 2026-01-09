@@ -25,7 +25,8 @@ This section provides a quick reference of all optimization stages with one-line
 - [x] **Stage 3:** Write Path Optimization - Batch write operations, reduce latency from 200ms to 50-100ms ✅ **COMPLETE**
 - [ ] **Stage 4:** Device Lookup Optimization - O(1) indexed maps for device lookups instead of linear search
 - [ ] **Stage 5:** Smart Refresh with State Detection - Skip polling stable devices, reduce HTTP requests by 30-50%
-- [ ] **Stage 6:** Lua Script Optimization - Eliminate read-after-write, cache static properties, 30-50% faster
+- [x] **Stage 6 (Part 1):** Lua Script Write Batching - Enable update-script.lua to handle arrays ✅ **COMPLETE**
+- [ ] **Stage 6 (Part 2):** Lua Script Read Optimization - Eliminate read-after-write, cache static properties
 
 ### Quick Reference: Files Modified Per Stage
 
@@ -1167,6 +1168,35 @@ func (gb *GateBroker) triggerFlush() {
 - **Total for 3 commands: 150-250ms (batched!)**
 
 **Expected improvement: 6-8x faster for multi-device commands**
+
+**CRITICAL DISCOVERY - Lua Script Limitation:**
+
+After implementing Stage 3, discovered that the Grenton update-script.lua
+DOES NOT support batch writes (array of objects). It only handles single
+objects. This is why:
+
+In gate_broker.go:206-210:
+```go
+if gb.MaxQueueLength > 1 {
+    jsonQ = Marshal(localQueue)      // Sends array
+} else {
+    jsonQ = Marshal(localQueue[0])   // Sends single object
+}
+```
+
+The read-script.lua handles arrays (for polling), but update-script.lua
+expects single objects only.
+
+**Result: Reverted SetterQueueSize to 1**
+- SetterQueueSize: 5 → 1 (no batching until Lua script fixed)
+- SetterFlushMs: 200 → 50 (kept, 2.5x faster flush)
+
+**Partial Stage 3 Success:**
+- ✅ Flush latency reduced: 200ms → 50ms
+- ❌ Batching blocked by Grenton Lua limitation
+- ⏸️ Full batching deferred to Stage 6 (requires Lua script update)
+
+**Commands working again after fix (commit 3f9ee05)**
 
 ---
 
