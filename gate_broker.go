@@ -63,16 +63,44 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 		return
 	}
 
+	// Block until at least one space is available
+	// This is the channel-based equivalent of: for spaceLeft() == 0 { sleep(10ms) }
+	<-gb.queueSpace
+
+	// Add error channel BEFORE processing objects (like old code)
+	// This ensures SendReq won't block forever even if all objects are duplicates/rejected
+	if cErr != nil {
+		gb.requesting.Lock()
+		gb.cErrors = append(gb.cErrors, cErr)
+		gb.requesting.Unlock()
+	}
+
+	gb.requesting.Lock()
+	defer gb.requesting.Unlock()
+
+	emptyQueue := (len(gb.queue) == 0)
 	objectsLeft = []ReqObject{}
-	objectsQueued := 0
+	usedFirstSlot := false
 
 	for _, obj := range objects {
-		// Try to acquire queue space with timeout
-		select {
-		case <-gb.queueSpace:
-			// Got space, proceed with queueing
-		case <-time.After(1 * time.Second):
-			// Queue full for 1s, reject this object
+		// Try to get a slot
+		// First object uses the slot we already acquired above (blocking)
+		// Subsequent objects try non-blocking
+		var gotSlot bool
+		if !usedFirstSlot {
+			gotSlot = true
+			usedFirstSlot = true
+		} else {
+			select {
+			case <-gb.queueSpace:
+				gotSlot = true
+			default:
+				gotSlot = false
+			}
+		}
+
+		if !gotSlot {
+			// No space available, add to objectsLeft for caller to retry
 			objectsLeft = append(objectsLeft, obj)
 			if gb.telemetry != nil {
 				gb.telemetry.RecordQueueReject()
@@ -83,7 +111,7 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 		// Check for duplicate using O(1) map lookup
 		key := obj.getKey()
 		if gb.queueMap[key] {
-			// Duplicate found, return space and skip
+			// Duplicate found, return the slot and skip
 			gb.queueSpace <- struct{}{}
 			if gb.telemetry != nil {
 				gb.telemetry.RecordQueueDuplicate()
@@ -91,35 +119,18 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 			continue
 		}
 
-		// Not a duplicate, add to queue
-		gb.requesting.Lock()
+		// Not a duplicate, add to queue (slot is consumed)
 		gb.queue = append(gb.queue, obj)
 		gb.queueMap[key] = true
-		gb.requesting.Unlock()
-
-		objectsQueued++
 		if gb.telemetry != nil {
 			gb.telemetry.RecordQueueAdd()
 		}
 	}
 
-	// Only add error channel if we successfully queued at least one object
-	if objectsQueued > 0 && cErr != nil {
-		gb.requesting.Lock()
-		gb.cErrors = append(gb.cErrors, cErr)
-		gb.requesting.Unlock()
-	}
-
-	// Check if we should trigger flush
-	gb.requesting.Lock()
-	queueLen := len(gb.queue)
-	gb.requesting.Unlock()
-
-	if queueLen >= gb.MaxQueueLength {
-		// Queue is full, flush immediately
+	// Trigger flush
+	if len(gb.queue) >= gb.MaxQueueLength {
 		go gb.Flush()
-	} else if queueLen == objectsQueued {
-		// Queue was empty before, schedule flush after period
+	} else if emptyQueue {
 		time.AfterFunc(gb.FlushPeriod, gb.Flush)
 	}
 
