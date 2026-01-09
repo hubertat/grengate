@@ -103,26 +103,22 @@ if req ~= nil then
 				singleResp.Id = rl.Id
 				singleResp.Kind = rl.Kind
 
-				if rl.Kind == "Light" and rl.Light ~= nil then
+				if rl.Kind == "Light" then
 					SetLight(rl.Clu, rl.Id, rl.Light)
-					-- Return minimal structure matching ReadLight format
-					singleResp.Light = {State = rl.Light.State or false}
+					-- Return what we set instead of reading back (eliminates race condition)
+					singleResp.Light = rl.Light
 				end
 
-				if rl.Kind == "Thermo" and rl.Thermo ~= nil then
+				if rl.Kind == "Thermo" then
 					SetThermo(rl.Clu, rl.Id, rl.Thermo)
-					-- Return minimal structure with fields we set
-					singleResp.Thermo = {
-						TempSetpoint = rl.Thermo.TempSetpoint or 20,
-						State = rl.Thermo.State or 0,
-						Mode = rl.Thermo.Mode or 0
-					}
+					-- Return what we set instead of reading back (eliminates race condition)
+					singleResp.Thermo = rl.Thermo
 				end
 
-				if rl.Kind == "Shutter" and rl.Cmd ~= nil then
+				if rl.Kind == "Shutter" then
 					SetShutter(rl.Clu, rl.Id, rl.Cmd)
-					-- Return minimal structure
-					singleResp.Shutter = {State = 0}  -- Placeholder, real state from next refresh
+					-- For shutter, we don't have state to return, omit response
+					-- grengate will get state on next refresh cycle
 				end
 
 				return singleResp
@@ -151,26 +147,22 @@ if req ~= nil then
 				singleResp.Id = req.Id
 				singleResp.Kind = req.Kind
 
-				if req.Kind == "Light" and req.Light ~= nil then
+				if req.Kind == "Light" then
 					SetLight(req.Clu, req.Id, req.Light)
-					-- Return minimal structure matching ReadLight format
-					singleResp.Light = {State = req.Light.State or false}
+					-- Return what we set instead of reading back (eliminates race condition)
+					singleResp.Light = req.Light
 				end
 
-				if req.Kind == "Thermo" and req.Thermo ~= nil then
+				if req.Kind == "Thermo" then
 					SetThermo(req.Clu, req.Id, req.Thermo)
-					-- Return minimal structure with fields we set
-					singleResp.Thermo = {
-						TempSetpoint = req.Thermo.TempSetpoint or 20,
-						State = req.Thermo.State or 0,
-						Mode = req.Thermo.Mode or 0
-					}
+					-- Return what we set instead of reading back (eliminates race condition)
+					singleResp.Thermo = req.Thermo
 				end
 
-				if req.Kind == "Shutter" and req.Cmd ~= nil then
+				if req.Kind == "Shutter" then
 					SetShutter(req.Clu, req.Id, req.Cmd)
-					-- Return minimal structure
-					singleResp.Shutter = {State = 0}  -- Placeholder, real state from next refresh
+					-- For shutter, we don't have state to return, omit response
+					-- grengate will get state on next refresh cycle
 				end
 
 				return singleResp
