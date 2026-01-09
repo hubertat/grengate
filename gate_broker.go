@@ -20,8 +20,8 @@ type GateBroker struct {
 	queue      []ReqObject
 	cErrors    []chan error
 	u          updater
-	working    sync.Mutex
-	requesting sync.Mutex
+	queueLock  sync.Mutex // Protects queue, queueMap, cErrors
+	httpLock   sync.Mutex // Ensures single-threaded HTTP requests
 
 	queueSpace chan struct{}   // Channel-based queue capacity management
 	queueMap   map[string]bool // O(1) duplicate checking
@@ -56,27 +56,23 @@ func (gb *GateBroker) Init(u updater, maxLength int, flushPeriod time.Duration, 
 
 
 func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft []ReqObject) {
-	gb.working.Lock()
-	defer gb.working.Unlock()
-
 	if len(objects) == 0 {
 		return
 	}
 
-	// Block until at least one space is available
+	// Block until at least one space is available (outside any lock)
 	// This is the channel-based equivalent of: for spaceLeft() == 0 { sleep(10ms) }
 	<-gb.queueSpace
+
+	// Now acquire queue lock for brief queue manipulation
+	gb.queueLock.Lock()
+	defer gb.queueLock.Unlock()
 
 	// Add error channel BEFORE processing objects (like old code)
 	// This ensures SendReq won't block forever even if all objects are duplicates/rejected
 	if cErr != nil {
-		gb.requesting.Lock()
 		gb.cErrors = append(gb.cErrors, cErr)
-		gb.requesting.Unlock()
 	}
-
-	gb.requesting.Lock()
-	defer gb.requesting.Unlock()
 
 	emptyQueue := (len(gb.queue) == 0)
 	objectsLeft = []ReqObject{}
@@ -127,7 +123,7 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 		}
 	}
 
-	// Trigger flush
+	// Trigger flush (still holding queueLock, but that's OK - just checking length)
 	if len(gb.queue) >= gb.MaxQueueLength {
 		go gb.Flush()
 	} else if emptyQueue {
@@ -154,41 +150,74 @@ func (gb *GateBroker) emptyQueue() {
 	gb.queueMap = make(map[string]bool)
 }
 
-func (gb *GateBroker) flushErrors(err error) {
-	for _, ce := range gb.cErrors {
+func flushErrorsToChannels(errorChans []chan error, err error) {
+	for _, ce := range errorChans {
 		ce <- err
 	}
 }
 
+// countUniqueCLUsInList returns the number of unique CLUs in a list of objects
+func countUniqueCLUsInList(objects []ReqObject) int {
+	cluMap := make(map[string]bool)
+	for _, obj := range objects {
+		cluMap[obj.Clu] = true
+	}
+	return len(cluMap)
+}
+
+// getCluAndObjectIdFromList extracts CLU and object IDs from a list (for single-object operations)
+func getCluAndObjectIdFromList(objects []ReqObject) (string, string) {
+	if len(objects) == 1 {
+		return objects[0].Clu, objects[0].Id
+	}
+	return "", ""
+}
+
 func (gb *GateBroker) Flush() {
 	startTime := time.Now()
-	defer gb.emptyQueue()
-	gb.requesting.Lock()
-	defer gb.requesting.Unlock()
 
+	// Acquire HTTP lock first to ensure single-threaded requests to Grenton GATE
+	gb.httpLock.Lock()
+	defer gb.httpLock.Unlock()
+
+	// Copy queue to local variables with SHORT queueLock
+	gb.queueLock.Lock()
 	if len(gb.queue) == 0 {
+		gb.queueLock.Unlock()
 		gb.u.Logf("]![ GateBroker tried to flush on empty queue! Skipping!\n")
 		return
 	}
 
-	objectCount := len(gb.queue)
-	cluCount := gb.countUniqueCLUs()
+	// Make local copies of everything we need
+	localQueue := make([]ReqObject, len(gb.queue))
+	copy(localQueue, gb.queue)
+	localErrors := make([]chan error, len(gb.cErrors))
+	copy(localErrors, gb.cErrors)
+	objectCount := len(localQueue)
+
+	// Clear queue and release space immediately
+	gb.emptyQueue()
+	gb.queueLock.Unlock()
+
+	// Now queue is available for new operations while we do HTTP!
+
+	cluCount := countUniqueCLUsInList(localQueue)
 	var jsonQ []byte
 	if gb.MaxQueueLength > 1 {
-		jsonQ, _ = json.Marshal(gb.queue)
+		jsonQ, _ = json.Marshal(localQueue)
 	} else {
-		jsonQ, _ = json.Marshal(gb.queue[0])
+		jsonQ, _ = json.Marshal(localQueue[0])
 	}
 	requestBytes := len(jsonQ)
 	gb.u.Logf("GateBroker Flush: query prepared, count: %d, clus: %d, bytes: %d", objectCount, cluCount, requestBytes)
 	gb.u.Debugf("GateBroker Flush: json query:\n%s\n", jsonQ)
 	req, err := http.NewRequest("POST", gb.PostPath, bytes.NewBuffer(jsonQ))
 	if err != nil {
-		gb.flushErrors(err)
+		flushErrorsToChannels(localErrors,err)
 		gb.u.Logf("New POST reques failed: ", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
-		cluId, objectId := gb.getCluAndObjectId()
+		cluId, objectId := getCluAndObjectIdFromList(localQueue)
 		if gb.telemetry != nil {
 			if gb.isSetter {
 				gb.telemetry.RecordSetterFlush(elapsed, objectCount, err)
@@ -209,11 +238,11 @@ func (gb *GateBroker) Flush() {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		gb.flushErrors(err)
+		flushErrorsToChannels(localErrors,err)
 		gb.u.Logf("GateBroker RequestAndUpdate http Client failed:\n%v", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
-		cluId, objectId := gb.getCluAndObjectId()
+		cluId, objectId := getCluAndObjectIdFromList(localQueue)
 		if gb.telemetry != nil {
 			if gb.isSetter {
 				gb.telemetry.RecordSetterFlush(elapsed, objectCount, err)
@@ -230,11 +259,11 @@ func (gb *GateBroker) Flush() {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
 		statusErr := fmt.Errorf("GateBroker received non-success http response from grenton host: %s", resp.Status)
-		gb.flushErrors(statusErr)
+		flushErrorsToChannels(localErrors,statusErr)
 		gb.u.Logf("GateBroker received non-success http response from grenton host: ", resp.Status)
 		// Record failed flush
 		elapsed := time.Since(startTime)
-		cluId, objectId := gb.getCluAndObjectId()
+		cluId, objectId := getCluAndObjectIdFromList(localQueue)
 		if gb.telemetry != nil {
 			if gb.isSetter {
 				gb.telemetry.RecordSetterFlush(elapsed, objectCount, statusErr)
@@ -256,11 +285,11 @@ func (gb *GateBroker) Flush() {
 
 	err = json.Unmarshal(bodyBytes, &data)
 	if err != nil {
-		gb.flushErrors(err)
+		flushErrorsToChannels(localErrors,err)
 		gb.u.Logf("Unmarshal data error: ", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
-		cluId, objectId := gb.getCluAndObjectId()
+		cluId, objectId := getCluAndObjectIdFromList(localQueue)
 		if gb.telemetry != nil {
 			if gb.isSetter {
 				gb.telemetry.RecordSetterFlush(elapsed, objectCount, err)
@@ -276,7 +305,7 @@ func (gb *GateBroker) Flush() {
 
 	// Record successful flush
 	elapsed := time.Since(startTime)
-	cluId, objectId := gb.getCluAndObjectId()
+	cluId, objectId := getCluAndObjectIdFromList(localQueue)
 	if gb.telemetry != nil {
 		if gb.isSetter {
 			gb.telemetry.RecordSetterFlush(elapsed, objectCount, nil)
@@ -294,21 +323,3 @@ func (gb *GateBroker) Flush() {
 }
 
 
-// getCluAndObjectId extracts CLU and object IDs from queue (for single-object operations)
-func (gb *GateBroker) getCluAndObjectId() (string, string) {
-	// Only return IDs if single object in queue (typical for setter/write operations)
-	if len(gb.queue) == 1 {
-		return gb.queue[0].Clu, gb.queue[0].Id
-	}
-	// Multiple objects or empty queue - return empty strings
-	return "", ""
-}
-
-// countUniqueCLUs returns the number of unique CLUs in the queue
-func (gb *GateBroker) countUniqueCLUs() int {
-	cluMap := make(map[string]bool)
-	for _, obj := range gb.queue {
-		cluMap[obj.Clu] = true
-	}
-	return len(cluMap)
-}
