@@ -105,17 +105,20 @@ if req ~= nil then
 
 				if rl.Kind == "Light" then
 					SetLight(rl.Clu, rl.Id, rl.Light)
-					singleResp.Light = ReadLight(rl.Clu, rl.Id)
+					-- Return what we set instead of reading back (eliminates race condition)
+					singleResp.Light = rl.Light
 				end
 
 				if rl.Kind == "Thermo" then
 					SetThermo(rl.Clu, rl.Id, rl.Thermo)
-					singleResp.Thermo = ReadThermo(rl.Clu, rl.Id, rl.Sensor)
+					-- Return what we set instead of reading back (eliminates race condition)
+					singleResp.Thermo = rl.Thermo
 				end
 
 				if rl.Kind == "Shutter" then
 					SetShutter(rl.Clu, rl.Id, rl.Cmd)
-					singleResp.Shutter = ReadShutter(rl.Clu, rl.Id)
+					-- For shutter, we don't have state to return, omit response
+					-- grengate will get state on next refresh cycle
 				end
 
 				return singleResp
@@ -146,17 +149,20 @@ if req ~= nil then
 
 				if req.Kind == "Light" then
 					SetLight(req.Clu, req.Id, req.Light)
-					singleResp.Light = ReadLight(req.Clu, req.Id)
+					-- Return what we set instead of reading back (eliminates race condition)
+					singleResp.Light = req.Light
 				end
 
 				if req.Kind == "Thermo" then
 					SetThermo(req.Clu, req.Id, req.Thermo)
-					singleResp.Thermo = ReadThermo(req.Clu, req.Id, req.Sensor)
+					-- Return what we set instead of reading back (eliminates race condition)
+					singleResp.Thermo = req.Thermo
 				end
 
 				if req.Kind == "Shutter" then
 					SetShutter(req.Clu, req.Id, req.Cmd)
-					singleResp.Shutter = ReadShutter(req.Clu, req.Id)
+					-- For shutter, we don't have state to return, omit response
+					-- grengate will get state on next refresh cycle
 				end
 
 				return singleResp
