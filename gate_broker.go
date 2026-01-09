@@ -214,7 +214,7 @@ func (gb *GateBroker) Flush() {
 	req, err := http.NewRequest("POST", gb.PostPath, bytes.NewBuffer(jsonQ))
 	if err != nil {
 		flushErrorsToChannels(localErrors,err)
-		gb.u.Logf("New POST reques failed: ", err)
+		gb.u.Logf("New POST request failed: %v", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
 		cluId, objectId := getCluAndObjectIdFromList(localQueue)
@@ -260,7 +260,7 @@ func (gb *GateBroker) Flush() {
 	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
 		statusErr := fmt.Errorf("GateBroker received non-success http response from grenton host: %s", resp.Status)
 		flushErrorsToChannels(localErrors,statusErr)
-		gb.u.Logf("GateBroker received non-success http response from grenton host: ", resp.Status)
+		gb.u.Logf("GateBroker received non-success http response from grenton host: %s", resp.Status)
 		// Record failed flush
 		elapsed := time.Since(startTime)
 		cluId, objectId := getCluAndObjectIdFromList(localQueue)
@@ -286,7 +286,7 @@ func (gb *GateBroker) Flush() {
 	err = json.Unmarshal(bodyBytes, &data)
 	if err != nil {
 		flushErrorsToChannels(localErrors,err)
-		gb.u.Logf("Unmarshal data error: ", err)
+		gb.u.Logf("Unmarshal data error: %v", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
 		cluId, objectId := getCluAndObjectIdFromList(localQueue)
