@@ -111,6 +111,9 @@ func (gs *GrentonSet) Config(path string) error {
 		gs.SetterFlushMs = 50 // Flush after 50ms for lower latency (was 200ms)
 	}
 
+	// Log configuration for debugging
+	gs.Logf("Write queue configuration: SetterQueueSize=%d, SetterFlushMs=%dms", gs.SetterQueueSize, gs.SetterFlushMs)
+
 	// Initialize telemetry
 	gs.telemetry = &Telemetry{lastReset: time.Now()}
 
