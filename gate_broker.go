@@ -258,9 +258,15 @@ func (gb *GateBroker) Flush() {
 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
+		// Read response body to see what Grenton is saying
+		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		bodyString := string(bodyBytes)
+
 		statusErr := fmt.Errorf("GateBroker received non-success http response from grenton host: %s", resp.Status)
 		flushErrorsToChannels(localErrors,statusErr)
 		gb.u.Logf("GateBroker received non-success http response from grenton host: %s", resp.Status)
+		gb.u.Logf("GateBroker 500 response body: %s", bodyString)
+		gb.u.Logf("GateBroker 500 request was: count=%d, clus=%d, bytes=%d", objectCount, cluCount, requestBytes)
 		// Record failed flush
 		elapsed := time.Since(startTime)
 		cluId, objectId := getCluAndObjectIdFromList(localQueue)

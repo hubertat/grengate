@@ -96,6 +96,8 @@ if req ~= nil then
 		resp = {}
 		for i, rl in ipairs(req) do
 			if (rl.Clu ~= nil) and (_G[rl.Clu] ~= nil) then
+				-- Wrap processing in pcall to catch errors
+				local success, result = pcall(function()
 				local singleResp = {}
 				singleResp.Clu = rl.Clu
 				singleResp.Id = rl.Id
@@ -116,29 +118,60 @@ if req ~= nil then
 					singleResp.Shutter = ReadShutter(rl.Clu, rl.Id)
 				end
 
-				resp[i] = singleResp
+				return singleResp
+				end)
+
+				if success then
+					resp[i] = result
+				else
+					-- Error occurred, log it and return error response
+					resp[i] = {
+						Clu = rl.Clu,
+						Id = rl.Id,
+						Kind = rl.Kind,
+						Error = "Lua error: " .. tostring(result)
+					}
+				end
 			end
 		end
 	else
 		-- Handle single request (backward compatible)
 		if (req.Clu ~= nil) and (_G[req.Clu] ~= nil) then
-			resp.Clu = req.Clu
-			resp.Id = req.Id
-			resp.Kind = req.Kind
+			-- Wrap processing in pcall to catch errors
+			local success, result = pcall(function()
+				local singleResp = {}
+				singleResp.Clu = req.Clu
+				singleResp.Id = req.Id
+				singleResp.Kind = req.Kind
 
-			if req.Kind == "Light" then
-				SetLight(req.Clu, req.Id, req.Light)
-				resp.Light = ReadLight(req.Clu, req.Id)
-			end
+				if req.Kind == "Light" then
+					SetLight(req.Clu, req.Id, req.Light)
+					singleResp.Light = ReadLight(req.Clu, req.Id)
+				end
 
-			if req.Kind == "Thermo" then
-				SetThermo(req.Clu, req.Id, req.Thermo)
-				resp.Thermo = ReadThermo(req.Clu, req.Id, req.Sensor)
-			end
+				if req.Kind == "Thermo" then
+					SetThermo(req.Clu, req.Id, req.Thermo)
+					singleResp.Thermo = ReadThermo(req.Clu, req.Id, req.Sensor)
+				end
 
-			if req.Kind == "Shutter" then
-				SetShutter(req.Clu, req.Id, req.Cmd)
-				resp.Shutter = ReadShutter(req.Clu, req.Id)
+				if req.Kind == "Shutter" then
+					SetShutter(req.Clu, req.Id, req.Cmd)
+					singleResp.Shutter = ReadShutter(req.Clu, req.Id)
+				end
+
+				return singleResp
+			end)
+
+			if success then
+				resp = result
+			else
+				-- Error occurred, return error response
+				resp = {
+					Clu = req.Clu,
+					Id = req.Id,
+					Kind = req.Kind,
+					Error = "Lua error: " .. tostring(result)
+				}
 			end
 		end
 	end
