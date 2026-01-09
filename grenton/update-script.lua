@@ -86,26 +86,62 @@ function SetShutter(clu, id, cmd)
 end
 
 
-if req ~= nil and (req.Clu ~= nil) and (_G[req.Clu] ~= nil) then
-	resp.Clu = req.Clu
-	resp.Id = req.Id
-	resp.Kind = req.Kind
+-- Check if req is an array or single object
+if req ~= nil then
+	-- Detect if it's an array by checking if first element has numeric key
+	local isArray = (type(req[1]) == "table")
 
-	if req.Kind == "Light" then
-		SetLight(req.Clu, req.Id, req.Light)
-		resp.Light = ReadLight(req.Clu, req.Id)
+	if isArray then
+		-- Handle array of requests (batch mode)
+		resp = {}
+		for i, rl in ipairs(req) do
+			if (rl.Clu ~= nil) and (_G[rl.Clu] ~= nil) then
+				local singleResp = {}
+				singleResp.Clu = rl.Clu
+				singleResp.Id = rl.Id
+				singleResp.Kind = rl.Kind
+
+				if rl.Kind == "Light" then
+					SetLight(rl.Clu, rl.Id, rl.Light)
+					singleResp.Light = ReadLight(rl.Clu, rl.Id)
+				end
+
+				if rl.Kind == "Thermo" then
+					SetThermo(rl.Clu, rl.Id, rl.Thermo)
+					singleResp.Thermo = ReadThermo(rl.Clu, rl.Id, rl.Sensor)
+				end
+
+				if rl.Kind == "Shutter" then
+					SetShutter(rl.Clu, rl.Id, rl.Cmd)
+					singleResp.Shutter = ReadShutter(rl.Clu, rl.Id)
+				end
+
+				resp[i] = singleResp
+			end
+		end
+	else
+		-- Handle single request (backward compatible)
+		if (req.Clu ~= nil) and (_G[req.Clu] ~= nil) then
+			resp.Clu = req.Clu
+			resp.Id = req.Id
+			resp.Kind = req.Kind
+
+			if req.Kind == "Light" then
+				SetLight(req.Clu, req.Id, req.Light)
+				resp.Light = ReadLight(req.Clu, req.Id)
+			end
+
+			if req.Kind == "Thermo" then
+				SetThermo(req.Clu, req.Id, req.Thermo)
+				resp.Thermo = ReadThermo(req.Clu, req.Id, req.Sensor)
+			end
+
+			if req.Kind == "Shutter" then
+				SetShutter(req.Clu, req.Id, req.Cmd)
+				resp.Shutter = ReadShutter(req.Clu, req.Id)
+			end
+		end
 	end
-
-	if req.Kind == "Thermo" then
-		SetThermo(req.Clu, req.Id, req.Thermo)
-		resp.Thermo = ReadThermo(req.Clu, req.Id, req.Sensor)
-	end
-
-	if req.Kind == "Shutter" then
-		SetShutter(req.Clu, req.Id, req.Cmd)
-		resp.Shutter = ReadShutter(req.Clu, req.Id)
-	end
-
 end
 
 GATE_HTTP->homebridge->SetResponseBody(resp)
