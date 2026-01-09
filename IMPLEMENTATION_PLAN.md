@@ -1852,6 +1852,57 @@ gs.Debugf("Refresh: polled %d devices, skipped %d stable",
 
 ---
 
+## Implementation Issues and Resolutions
+
+### Stage 6 Part 2: Read-After-Write Elimination
+
+**Commits:**
+- `5d86168` - Initial implementation (WORKING) ✅
+- `418d388` - Attempted structured responses (BROKEN - 50% commands fail) ❌
+- `609b64e` - Attempted nil checks (CRITICAL FAILURE - all broken) ❌
+- `8712dc6` - Reverted to working state ✅
+
+**What Went Wrong:**
+
+1. **Structured Response Attempt (418d388):**
+   - Changed Lua script to return minimal structures: `{State = rl.Light.State}`
+   - Caused 50% of commands to fail
+   - Root cause: Unknown - potentially losing data grengate needs
+   - User feedback: "No errors in logs but also commands are not working, something like 50% of commands"
+
+2. **Nil Checks Attempt (609b64e):**
+   - Added `if rl.Light ~= nil` checks
+   - Added default values: `rl.Light.State or false`
+   - Result: CATASTROPHIC FAILURE
+     - Everything slow again
+     - Many commands not executing
+     - Batching completely broken (only 1 command per array)
+     - Commands failing silently
+   - User feedback: "Something is much worse still"
+
+**Root Cause Analysis:**
+
+The nil checks and structured responses broke the system because:
+- The minimal response structure `{State = ...}` loses information that Go code may need
+- Even though `LoadReqObject()` only uses the State field, the structured response may break JSON unmarshaling or other processing
+- The working solution is simple: Return exactly what was sent (`singleResp.Light = rl.Light`)
+- This preserves all fields and ensures compatibility
+
+**Current State (8712dc6):**
+- ✅ Reverted to 5d86168 working state
+- ✅ Returns full objects: `singleResp.Light = rl.Light`
+- ✅ No nil checks - trusts Go code to send valid requests
+- ✅ Batching works ("multi commands works super fast")
+- ✅ Fast performance maintained
+
+**Lessons Learned:**
+1. Don't over-engineer responses - return what was sent
+2. Nil checks can break batching if they filter out valid commands
+3. The simple solution (return full object) works better than minimal structures
+4. Trust the Go code to send valid requests with populated fields
+
+---
+
 ## Next Steps
 
 1. **Review & Prioritize** - Discuss plan with user, adjust priorities
