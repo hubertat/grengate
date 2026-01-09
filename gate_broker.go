@@ -22,6 +22,9 @@ type GateBroker struct {
 	u          updater
 	working    sync.Mutex
 	requesting sync.Mutex
+
+	telemetry *Telemetry
+	isSetter  bool
 }
 
 type updater interface {
@@ -30,10 +33,12 @@ type updater interface {
 	Debugf(string, ...interface{})
 }
 
-func (gb *GateBroker) Init(u updater, maxLength int, flushPeriod time.Duration) {
+func (gb *GateBroker) Init(u updater, maxLength int, flushPeriod time.Duration, telemetry *Telemetry, isSetter bool) {
 	gb.u = u
 	gb.MaxQueueLength = maxLength
 	gb.FlushPeriod = flushPeriod
+	gb.telemetry = telemetry
+	gb.isSetter = isSetter
 }
 
 func (gb *GateBroker) checkIfPresent(obj ReqObject) bool {
@@ -76,8 +81,19 @@ func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft 
 		if !gb.checkIfPresent(obj) {
 			if gb.spaceLeft() > 0 {
 				gb.queue = append(gb.queue, obj)
+				if gb.telemetry != nil {
+					gb.telemetry.RecordQueueAdd()
+				}
 			} else {
 				objectsLeft = append(objectsLeft, obj)
+				if gb.telemetry != nil {
+					gb.telemetry.RecordQueueReject()
+				}
+			}
+		} else {
+			// Record duplicate
+			if gb.telemetry != nil {
+				gb.telemetry.RecordQueueDuplicate()
 			}
 		}
 	}
@@ -104,6 +120,7 @@ func (gb *GateBroker) flushErrors(err error) {
 }
 
 func (gb *GateBroker) Flush() {
+	startTime := time.Now()
 	defer gb.emptyQueue()
 	gb.requesting.Lock()
 	defer gb.requesting.Unlock()
@@ -113,18 +130,28 @@ func (gb *GateBroker) Flush() {
 		return
 	}
 
+	objectCount := len(gb.queue)
 	var jsonQ []byte
 	if gb.MaxQueueLength > 1 {
 		jsonQ, _ = json.Marshal(gb.queue)
 	} else {
 		jsonQ, _ = json.Marshal(gb.queue[0])
 	}
-	gb.u.Logf("GateBroker Flush: query prepared, count: %d, bytes: %d", len(gb.queue), len(jsonQ))
+	gb.u.Logf("GateBroker Flush: query prepared, count: %d, bytes: %d", objectCount, len(jsonQ))
 	gb.u.Debugf("GateBroker Flush: json query:\n%s\n", jsonQ)
 	req, err := http.NewRequest("POST", gb.PostPath, bytes.NewBuffer(jsonQ))
 	if err != nil {
 		gb.flushErrors(err)
 		gb.u.Logf("New POST reques failed: ", err)
+		// Record failed flush
+		elapsed := time.Since(startTime)
+		if gb.telemetry != nil {
+			if gb.isSetter {
+				gb.telemetry.RecordSetterFlush(elapsed, objectCount, err)
+			} else {
+				gb.telemetry.RecordFlush(elapsed, objectCount, err)
+			}
+		}
 		return
 	}
 
@@ -137,13 +164,32 @@ func (gb *GateBroker) Flush() {
 	if err != nil {
 		gb.flushErrors(err)
 		gb.u.Logf("GateBroker RequestAndUpdate http Client failed:\n%v", err)
+		// Record failed flush
+		elapsed := time.Since(startTime)
+		if gb.telemetry != nil {
+			if gb.isSetter {
+				gb.telemetry.RecordSetterFlush(elapsed, objectCount, err)
+			} else {
+				gb.telemetry.RecordFlush(elapsed, objectCount, err)
+			}
+		}
 		return
 	}
 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
-		gb.flushErrors(fmt.Errorf("GateBroker received non-success http response from grenton host: %s", resp.Status))
+		statusErr := fmt.Errorf("GateBroker received non-success http response from grenton host: %s", resp.Status)
+		gb.flushErrors(statusErr)
 		gb.u.Logf("GateBroker received non-success http response from grenton host: ", resp.Status)
+		// Record failed flush
+		elapsed := time.Since(startTime)
+		if gb.telemetry != nil {
+			if gb.isSetter {
+				gb.telemetry.RecordSetterFlush(elapsed, objectCount, statusErr)
+			} else {
+				gb.telemetry.RecordFlush(elapsed, objectCount, statusErr)
+			}
+		}
 		return
 	}
 
@@ -157,9 +203,29 @@ func (gb *GateBroker) Flush() {
 	if err != nil {
 		gb.flushErrors(err)
 		gb.u.Logf("Unmarshal data error: ", err)
+		// Record failed flush
+		elapsed := time.Since(startTime)
+		if gb.telemetry != nil {
+			if gb.isSetter {
+				gb.telemetry.RecordSetterFlush(elapsed, objectCount, err)
+			} else {
+				gb.telemetry.RecordFlush(elapsed, objectCount, err)
+			}
+		}
 		return
 	}
-	gb.u.Logf("GateBroker Flush finished, will update.")
+
+	// Record successful flush
+	elapsed := time.Since(startTime)
+	if gb.telemetry != nil {
+		if gb.isSetter {
+			gb.telemetry.RecordSetterFlush(elapsed, objectCount, nil)
+		} else {
+			gb.telemetry.RecordFlush(elapsed, objectCount, nil)
+		}
+	}
+
+	gb.u.Logf("GateBroker Flush: completed %d objects in %dms", objectCount, elapsed.Milliseconds())
 	gb.u.update(data)
 
 }

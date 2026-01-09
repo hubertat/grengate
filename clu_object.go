@@ -97,6 +97,8 @@ func (co *CluObject) Update() error {
 }
 
 func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
+	// Start timing total command duration
+	commandStartTime := time.Now()
 
 	if input.Cmd == "" {
 		input.Cmd = "SET"
@@ -104,9 +106,31 @@ func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
 
 	errors := make(chan error)
 
+	// Time when we start queueing
+	queueStartTime := time.Now()
+
 	gl.clu.set.setter.Queue(errors, input)
 
+	// Queue wait time ends when flush completes (err received)
 	err = <-errors
+	queueWaitDuration := time.Since(queueStartTime)
+
+	// Total command duration
+	totalDuration := time.Since(commandStartTime)
+
+	// Record command telemetry
+	if gl.clu.set.telemetry != nil {
+		gl.clu.set.telemetry.RecordCommand(totalDuration, queueWaitDuration)
+	}
+	if gl.clu.set.influxReporter != nil {
+		gl.clu.set.influxReporter.ReportCommandMetrics(
+			totalDuration.Milliseconds(),
+			queueWaitDuration.Milliseconds(),
+		)
+	}
+
+	gl.clu.set.Debugf("SendReq: total=%dms, queueWait=%dms",
+		totalDuration.Milliseconds(), queueWaitDuration.Milliseconds())
 
 	return
 

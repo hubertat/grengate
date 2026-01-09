@@ -32,6 +32,8 @@ type GrentonSet struct {
 	PerformAutotest bool
 	QueryLimit      int
 
+	InfluxDB InfluxConfig
+
 	lastUpdated   time.Time
 	freshDuration time.Duration
 	cycleDuration time.Duration
@@ -39,6 +41,9 @@ type GrentonSet struct {
 
 	broker GateBroker
 	setter GateBroker
+
+	telemetry      *Telemetry
+	influxReporter *InfluxReporter
 }
 
 // Debugf logs info, when Verbose option is on
@@ -94,12 +99,19 @@ func (gs *GrentonSet) Config(path string) error {
 		gs.HkPath = "hk"
 	}
 
+	// Initialize telemetry
+	gs.telemetry = &Telemetry{lastReset: time.Now()}
+
+	// Initialize InfluxDB reporter
+	gs.influxReporter = NewInfluxReporter(gs.InfluxDB)
+
+	// Initialize brokers with telemetry
 	gs.broker = GateBroker{}
-	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration)
+	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration, gs.telemetry, false)
 	gs.broker.PostPath = gs.Host + gs.ReadPath
 
 	gs.setter = GateBroker{}
-	gs.setter.Init(gs, 1, 200*time.Millisecond)
+	gs.setter.Init(gs, 1, 200*time.Millisecond, gs.telemetry, true)
 	gs.setter.PostPath = gs.GetSetPath()
 
 	return nil
@@ -131,6 +143,7 @@ func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.A) {
 
 // Refresh is calling RequestAndUpdate function to get fresh values
 func (gs *GrentonSet) Refresh() {
+	startTime := time.Now()
 
 	query := []ReqObject{}
 	for _, clu := range gs.Clus {
@@ -156,10 +169,25 @@ func (gs *GrentonSet) Refresh() {
 		}
 	}
 
+	objectCount := len(query)
+	gs.Logf("Refresh: queuing %d objects", objectCount)
+
 	objectsPending := gs.broker.Queue(nil, query...)
 	for len(objectsPending) > 0 {
 		objectsPending = gs.broker.Queue(nil, objectsPending...)
 	}
+
+	// Record refresh telemetry
+	elapsed := time.Since(startTime)
+	changedCount := 0  // TODO: Track changed count in update() method
+	skippedCount := 0  // For Stage 5
+	if gs.telemetry != nil {
+		gs.telemetry.RecordRefresh(elapsed, objectCount, changedCount, skippedCount)
+	}
+	if gs.influxReporter != nil {
+		gs.influxReporter.ReportRefreshMetrics(objectCount, changedCount, skippedCount, elapsed.Milliseconds())
+	}
+	gs.Logf("Refresh: completed %d objects in %dms", objectCount, elapsed.Milliseconds())
 
 	gs.lastUpdated = time.Now()
 
