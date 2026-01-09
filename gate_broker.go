@@ -54,6 +54,12 @@ func (gb *GateBroker) Init(u updater, maxLength int, flushPeriod time.Duration, 
 	gb.queueMap = make(map[string]bool)
 }
 
+func (gb *GateBroker) opType() string {
+	if gb.isSetter {
+		return "WRITE"
+	}
+	return "READ"
+}
 
 func (gb *GateBroker) Queue(cErr chan error, objects ...ReqObject) (objectsLeft []ReqObject) {
 	if len(objects) == 0 {
@@ -184,7 +190,7 @@ func (gb *GateBroker) Flush() {
 	gb.queueLock.Lock()
 	if len(gb.queue) == 0 {
 		gb.queueLock.Unlock()
-		gb.u.Logf("]![ GateBroker tried to flush on empty queue! Skipping!\n")
+		gb.u.Logf("]![ %s GateBroker tried to flush on empty queue! Skipping!\n", gb.opType())
 		return
 	}
 
@@ -209,8 +215,8 @@ func (gb *GateBroker) Flush() {
 		jsonQ, _ = json.Marshal(localQueue[0])
 	}
 	requestBytes := len(jsonQ)
-	gb.u.Logf("GateBroker Flush: query prepared, count: %d, clus: %d, bytes: %d", objectCount, cluCount, requestBytes)
-	gb.u.Debugf("GateBroker Flush: json query:\n%s\n", jsonQ)
+	gb.u.Logf("%s GateBroker Flush: query prepared, count: %d, clus: %d, bytes: %d", gb.opType(), objectCount, cluCount, requestBytes)
+	gb.u.Debugf("%s GateBroker Flush: json query:\n%s\n", gb.opType(), jsonQ)
 	req, err := http.NewRequest("POST", gb.PostPath, bytes.NewBuffer(jsonQ))
 	if err != nil {
 		flushErrorsToChannels(localErrors,err)
@@ -323,7 +329,7 @@ func (gb *GateBroker) Flush() {
 		gb.influxReporter.ReportFlushMetrics(objectCount, cluCount, requestBytes, elapsed.Milliseconds(), gb.isSetter, cluId, objectId, nil)
 	}
 
-	gb.u.Logf("GateBroker Flush: completed %d objects, %d CLUs in %dms", objectCount, cluCount, elapsed.Milliseconds())
+	gb.u.Logf("%s GateBroker Flush: completed %d objects, %d CLUs in %dms", gb.opType(), objectCount, cluCount, elapsed.Milliseconds())
 	gb.u.update(data)
 
 }
