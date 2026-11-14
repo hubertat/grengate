@@ -28,6 +28,13 @@
 					"Id": 4321,
 					"Kind": "DOU",
 					"Name": "Light other"
+				},
+				## optional HkType: "Lightbulb" (default) or "Outlet" - same DOUT, shown in HomeKit as power outlet
+				{
+					"Id": 5678,
+					"Kind": "DOU",
+					"Name": "Desk socket",
+					"HkType": "Outlet"
 				}
 			],
 			"Therms": [

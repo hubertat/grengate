@@ -4,6 +4,14 @@ import (
 	"fmt"
 
 	"github.com/brutella/hap/accessory"
+	"github.com/brutella/hap/characteristic"
+)
+
+// HomeKit representations available for a Light (binary DOUT output).
+// The Grenton side is identical for all of them; only the HomeKit accessory differs.
+const (
+	HkTypeLightbulb = "Lightbulb"
+	HkTypeOutlet    = "Outlet"
 )
 
 type Light struct {
@@ -11,7 +19,22 @@ type Light struct {
 
 	State bool
 
-	hk *accessory.Lightbulb
+	// HkType selects the HomeKit accessory: "Lightbulb" (default when empty) or "Outlet".
+	HkType string `json:",omitempty"`
+
+	hkA     *accessory.A
+	hkOn    *characteristic.On
+	hkInUse *characteristic.OutletInUse // nil unless HkType is Outlet
+}
+
+// validateHkType returns an error when HkType is set to an unsupported value.
+func (gl *Light) validateHkType() error {
+	switch gl.HkType {
+	case "", HkTypeLightbulb, HkTypeOutlet:
+		return nil
+	}
+	return fmt.Errorf("light %q (%s%04d): unsupported HkType %q, use %q or %q",
+		gl.Name, gl.Kind, gl.Id, gl.HkType, HkTypeLightbulb, HkTypeOutlet)
 }
 
 func (gl *Light) LoadReqObject(obj ReqObject) error {
@@ -39,7 +62,9 @@ func (gl *Light) InitAll() {
 	}
 	gl.AppendHk()
 }
-func (gl *Light) AppendHk() *accessory.Lightbulb {
+
+// AppendHk creates the HomeKit accessory matching HkType.
+func (gl *Light) AppendHk() *accessory.A {
 	info := accessory.Info{
 		Name:         gl.Name,
 		SerialNumber: fmt.Sprintf("%d", gl.Id),
@@ -47,18 +72,40 @@ func (gl *Light) AppendHk() *accessory.Lightbulb {
 		Model:        gl.Kind,
 	}
 
-	gl.hk = accessory.NewLightbulb(info)
-	gl.hk.Id = gl.GetLongId()
+	switch gl.HkType {
+	case HkTypeOutlet:
+		hk := accessory.NewOutlet(info)
+		gl.hkA, gl.hkOn, gl.hkInUse = hk.A, hk.Outlet.On, hk.Outlet.OutletInUse
+	default:
+		hk := accessory.NewLightbulb(info)
+		gl.hkA, gl.hkOn = hk.A, hk.Lightbulb.On
+	}
 
-	gl.hk.Lightbulb.On.OnValueRemoteUpdate(gl.Set)
-	// gl.hk.Lightbulb.On.OnValueRemoteGet(gl.Get)
+	gl.hkA.Id = gl.GetLongId()
+	gl.hkOn.OnValueRemoteUpdate(gl.Set)
 
-	gl.clu.set.Logf("HK Lightbulb added (id: %x, type: %d", gl.hk.A.Id, gl.hk.A.Type)
-	return gl.hk
+	gl.clu.set.Logf("HK %s added (id: %x, type: %d)", gl.hkTypeName(), gl.hkA.Id, gl.hkA.Type)
+	return gl.hkA
+}
+
+// HkAccessory returns the HomeKit accessory created by AppendHk.
+func (gl *Light) HkAccessory() *accessory.A {
+	return gl.hkA
+}
+
+func (gl *Light) hkTypeName() string {
+	if gl.HkType == "" {
+		return HkTypeLightbulb
+	}
+	return gl.HkType
 }
 
 func (gl *Light) Sync() {
-	gl.hk.Lightbulb.On.SetValue(gl.State)
+	gl.hkOn.SetValue(gl.State)
+	if gl.hkInUse != nil {
+		// Grenton has no power sensing, so "in use" mirrors the on/off state.
+		gl.hkInUse.SetValue(gl.State)
+	}
 }
 
 func (gl *Light) Get() bool {
