@@ -57,6 +57,22 @@ Enabling service, so it will run on system startup:
 sudo systemctl enable grengate
 ```
 
+#### power outlets
+
+Any Grenton DOUT configured under `Lights` can be shown in HomeKit as a power outlet instead of a lightbulb.
+Set `"HkType": "Outlet"` on that entry (default is `"Lightbulb"`):
+
+```json
+"Lights": [
+	{ "Id": 5678, "Kind": "DOU", "Name": "Desk socket", "HkType": "Outlet" }
+]
+```
+
+Grenton side (GATE Lua script) is unchanged: it is still read and set as a `Light`.
+Grenton has no power sensing, so HomeKit "Outlet In Use" mirrors the on/off state.
+Changing `HkType` of an already paired device keeps its accessory id; if the Home app shows it
+incorrectly, remove the accessory and let it be re-added.
+
 ### grenton GATE
 
 #### http listener

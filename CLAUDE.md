@@ -76,7 +76,7 @@ Configuration is JSON-based. See `config.json.example` for structure:
    - **Critical**: Grenton GATE cannot handle many rapid HTTP requests, so batching is essential
 
 4. **Device Types** - Each implements HomeKit accessories
-   - **Light** (`light.go`): Binary on/off lights (DOUT devices)
+   - **Light** (`light.go`): Binary on/off DOUT devices. `HkType` selects the HomeKit accessory: `Lightbulb` (default) or `Outlet`; the Grenton side (Kind `Light`) is identical for both
    - **Thermo** (`thermo.go`): Thermostats with target/current temperature
    - **Shutter** (`shutter.go`): Window coverings with position control and simulated movement
    - **MotionSensor** (`motion_sensor.go`): Binary motion detection
@@ -132,7 +132,7 @@ Configuration is JSON-based. See `config.json.example` for structure:
 
 ## Development Notes
 
-- **No Tests**: Currently no test files in the codebase
+- **Tests**: `go test ./...` (`light_test.go` has helpers `newTestClu`/`findC` for building devices without a real GATE)
 - **Logging**: Use `GrentonSet.Logf()` for normal logs, `Debugf()` for verbose (controlled by Verbose config)
 - **Error Handling**: Errors logged via `GrentonSet.Error()`, often with `pkg/errors.Wrap/Wrapf`
 - **Concurrency**: Mutexes used in GateBroker and Clu to prevent race conditions
