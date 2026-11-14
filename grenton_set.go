@@ -71,6 +71,14 @@ func (gs *GrentonSet) Config(path string) error {
 		return fmt.Errorf("GrentonSet Config: error loading config json: %w", err)
 	}
 
+	for _, clu := range gs.Clus {
+		for _, light := range clu.Lights {
+			if err := light.validateHkType(); err != nil {
+				return fmt.Errorf("GrentonSet Config: clu %s: %w", clu.Id, err)
+			}
+		}
+	}
+
 	confDuration, err := time.ParseDuration(fmt.Sprintf("%ds", gs.FreshInSeconds))
 	if gs.FreshInSeconds > 0 && err == nil {
 		gs.freshDuration = confDuration
