@@ -2054,6 +2054,10 @@ Write requests include fields not needed by Grenton:
 - `thermo.go` - Create minimal Thermo object
 - `shutter.go` - Already minimal (just Cmd)
 
+**NOTE**
+Grenton needs object inside ReqObject: for example Light objects have target state.
+Maybe removing part of it is nor worth anything.
+
 #### 2. Fine-Tune Performance Parameters
 **Goal:** Find optimal balance between responsiveness and batching efficiency
 

@@ -17,11 +17,11 @@ type GateBroker struct {
 	MaxQueueLength int
 	PostPath       string
 
-	queue      []ReqObject
-	cErrors    []chan error
-	u          updater
-	queueLock  sync.Mutex // Protects queue, queueMap, cErrors
-	httpLock   sync.Mutex // Ensures single-threaded HTTP requests
+	queue     []ReqObject
+	cErrors   []chan error
+	u         updater
+	queueLock sync.Mutex // Protects queue, queueMap, cErrors
+	httpLock  sync.Mutex // Ensures single-threaded HTTP requests
 
 	queueSpace chan struct{}   // Channel-based queue capacity management
 	queueMap   map[string]bool // O(1) duplicate checking
@@ -234,7 +234,7 @@ func (gb *GateBroker) Flush() {
 	gb.u.Debugf("%s GateBroker Flush: json query:\n%s\n", gb.opType(), jsonQ)
 	req, err := http.NewRequest("POST", gb.PostPath, bytes.NewBuffer(jsonQ))
 	if err != nil {
-		flushErrorsToChannels(localErrors,err)
+		flushErrorsToChannels(localErrors, err)
 		gb.u.Logf("New POST request failed: %v", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
@@ -259,7 +259,7 @@ func (gb *GateBroker) Flush() {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		flushErrorsToChannels(localErrors,err)
+		flushErrorsToChannels(localErrors, err)
 		gb.u.Logf("GateBroker RequestAndUpdate http Client failed:\n%v", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
@@ -284,7 +284,7 @@ func (gb *GateBroker) Flush() {
 		bodyString := string(bodyBytes)
 
 		statusErr := fmt.Errorf("GateBroker received non-success http response from grenton host: %s", resp.Status)
-		flushErrorsToChannels(localErrors,statusErr)
+		flushErrorsToChannels(localErrors, statusErr)
 		gb.u.Logf("GateBroker received non-success http response from grenton host: %s", resp.Status)
 		gb.u.Logf("GateBroker 500 response body: %s", bodyString)
 		gb.u.Logf("GateBroker 500 request was: count=%d, clus=%d, bytes=%d", objectCount, cluCount, requestBytes)
@@ -312,7 +312,7 @@ func (gb *GateBroker) Flush() {
 
 	err = json.Unmarshal(bodyBytes, &data)
 	if err != nil {
-		flushErrorsToChannels(localErrors,err)
+		flushErrorsToChannels(localErrors, err)
 		gb.u.Logf("Unmarshal data error: %v", err)
 		// Record failed flush
 		elapsed := time.Since(startTime)
@@ -348,5 +348,3 @@ func (gb *GateBroker) Flush() {
 	gb.u.update(data)
 
 }
-
-
