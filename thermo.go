@@ -62,8 +62,13 @@ func (gt *Thermo) AppendHk() *accessory.Thermostat {
 	gt.hk = accessory.NewThermostat(info)
 	gt.hk.Id = gt.GetLongId()
 
+	// Three-field commands (legacy write protocol) need setpoint, state and mode: writes are
+	// refused until the thermostat was read (concept 3.5).
+	gt.hk.Thermostat.TargetHeatingCoolingState.SetValueRequestFunc = gt.writeGuard("mode change")
+	gt.hk.Thermostat.TargetTemperature.SetValueRequestFunc = gt.writeGuard("temperature change")
 	gt.hk.Thermostat.TargetHeatingCoolingState.OnValueRemoteUpdate(gt.SetState)
 	gt.hk.Thermostat.TargetTemperature.OnValueRemoteUpdate(gt.SetTemperature)
+	gt.guardReads(gt.hk.A)
 
 	gt.clu.set.Logf("HK Thermostat added (id: %x, type: %d", gt.hk.A.Id, gt.hk.A.Type)
 	return gt.hk
@@ -98,6 +103,9 @@ func (gt *Thermo) commandLocked() ReqObject {
 func (gt *Thermo) SetTemperature(temp float64) {
 	gt.mu.Lock()
 	defer gt.mu.Unlock()
+	if !gt.ready { // refused by writeGuard; never send a command built on unknown values
+		return
+	}
 	gt.TempSetpoint = temp
 	gt.TempTarget = temp // what HomeKit shows as the target until the confirm read
 	gt.submitCommandLocked(gt.commandLocked())
@@ -108,6 +116,9 @@ func (gt *Thermo) SetTemperature(temp float64) {
 func (gt *Thermo) SetState(state int) {
 	gt.mu.Lock()
 	defer gt.mu.Unlock()
+	if !gt.ready { // refused by writeGuard
+		return
+	}
 	switch state {
 	case 1:
 		gt.State = 1

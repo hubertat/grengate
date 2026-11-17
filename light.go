@@ -80,7 +80,10 @@ func (gl *Light) AppendHk() *accessory.A {
 	}
 
 	gl.hkA.Id = gl.GetLongId()
+	// A light write needs no baseline: it always goes through. OnValueRemoteUpdate runs
+	// after hap stored the value, so nothing the command triggers can race with that store.
 	gl.hkOn.OnValueRemoteUpdate(gl.Set)
+	gl.guardReads(gl.hkA)
 
 	gl.clu.set.Logf("HK %s added (id: %x, type: %d)", gl.hkTypeName(), gl.hkA.Id, gl.hkA.Type)
 	return gl.hkA

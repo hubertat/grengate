@@ -50,6 +50,7 @@ func (ms *MotionSensor) appendHk() *accessory.A {
 	ms.hkService.AddC(ms.hkFault.C)
 	ms.hkAccessory.AddS(ms.hkService.S)
 	ms.hkService.MotionDetected.SetValue(false)
+	ms.guardReads(ms.hkAccessory)
 
 	ms.clu.set.Logf("HK MotionSensor added (id: %x)", ms.hkAccessory.Id)
 

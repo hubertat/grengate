@@ -70,6 +70,7 @@ func (sh *Shutter) AppendHk() {
 	sh.hk.WindowCovering.PositionState.SetValue(sh.GetHkState())
 
 	sh.hk.WindowCovering.TargetPosition.OnValueRemoteUpdate(sh.SetPosition)
+	sh.guardReads(sh.hk.A)
 
 	sh.clu.set.Logf("HK WindowCovering added (id: %x)", sh.hk.A.Id)
 }

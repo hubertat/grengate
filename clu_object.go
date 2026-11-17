@@ -2,9 +2,18 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/brutella/hap"
+	"github.com/brutella/hap/accessory"
+	"github.com/brutella/hap/service"
 )
+
+// hkNoResponse is the HAP status for a device that cannot answer (concept 3.5): HomeKit
+// shows it as not responding.
+const hkNoResponse = hap.JsonStatusServiceCommunicationFailure
 
 type ReqObject struct {
 	Clu    string
@@ -137,6 +146,47 @@ func (co *CluObject) appliedLocked(changed bool) ApplyOutcome {
 		return ApplyChanged
 	}
 	return ApplyUnchanged
+}
+
+// guardReads makes HomeKit reads of the accessory's characteristics (all services except
+// the accessory information) answer with an error status while the device is not ready,
+// so it shows as not responding instead of showing made-up defaults (concept 3.5).
+func (co *CluObject) guardReads(a *accessory.A) {
+	for _, s := range a.Ss {
+		if s.Type == service.TypeAccessoryInformation {
+			continue
+		}
+		for _, c := range s.Cs {
+			c.ValueRequestFunc = func(*http.Request) (any, int) {
+				if !co.isReady() {
+					return nil, hkNoResponse
+				}
+				return c.Val, 0
+			}
+		}
+	}
+}
+
+// writeGuard returns a hap SetValueRequestFunc for a write that needs the device's
+// baseline (concept 3.5): while the device is not ready the write is refused with an error
+// status, logged, and a read of the device is queued. hap calls it before it stores the
+// value and before the OnValueRemoteUpdate callbacks, which do the write when it passes.
+func (co *CluObject) writeGuard(what string) func(any, *http.Request) (any, int) {
+	return func(v any, _ *http.Request) (any, int) {
+		if co.isReady() {
+			return nil, 0
+		}
+		co.refuseWrite(fmt.Sprintf("%s to %v", what, v))
+		return nil, hkNoResponse
+	}
+}
+
+// refuseWrite logs a refused HomeKit write and queues a read of the device.
+func (co *CluObject) refuseWrite(what string) {
+	clu := co.clu
+	clu.set.Logf("%q (%s|%s): %s refused: not read from the GATE yet; reading it now",
+		co.Name, clu.Id, co.GetMixedId(), what)
+	clu.set.reader.Submit(co.readRequest())
 }
 
 // waitCommand waits for the result of a submitted command (the shutter still waits for the
