@@ -24,11 +24,6 @@ type Thermo struct {
 	State int
 }
 
-func (gt *Thermo) GetHkState() (hkState int) {
-	hkState = gt.State
-	return
-}
-
 // LoadReqObject applies a read item and pushes the state to HomeKit.
 func (gt *Thermo) LoadReqObject(obj ReqObject) error { return loadReqObject(gt, obj) }
 
@@ -40,6 +35,8 @@ func (gt *Thermo) applyRead(obj ReqObject) (bool, error) {
 		return false, fmt.Errorf("Thermo: missing Thermo object")
 	}
 	in := obj.Thermo
+	gt.mu.Lock()
+	defer gt.mu.Unlock()
 	changed := !gt.loaded ||
 		gt.TempCurrent != in.TempCurrent || gt.TempSetpoint != in.TempSetpoint || gt.TempTarget != in.TempTarget ||
 		gt.TempMin != in.TempMin || gt.TempMax != in.TempMax || gt.TempHoliday != in.TempHoliday ||
@@ -85,19 +82,42 @@ func (gt *Thermo) AppendHk() *accessory.Thermostat {
 }
 
 func (gt *Thermo) Sync() {
+	gt.syncMu.Lock()
+	defer gt.syncMu.Unlock()
+	gt.mu.Lock()
+	current, target, state := gt.TempCurrent, gt.TempTarget, gt.State
+	gt.mu.Unlock()
 
-	gt.hk.Thermostat.CurrentTemperature.SetValue(gt.TempCurrent)
-	gt.hk.Thermostat.TargetTemperature.SetValue(gt.TempTarget)
-	gt.hk.Thermostat.CurrentHeatingCoolingState.SetValue(gt.GetHkState())
+	gt.hk.Thermostat.CurrentTemperature.SetValue(current)
+	gt.hk.Thermostat.TargetTemperature.SetValue(target)
+	gt.hk.Thermostat.CurrentHeatingCoolingState.SetValue(state)
+}
 
+// commandLocked builds the write payload (all three fields, as the current script needs)
+// from a copy of the device state. Call with gt.mu held.
+func (gt *Thermo) commandLocked() ReqObject {
+	req := gt.Req
+	req.Thermo = &Thermo{
+		CluObject:    gt.wireIdentity(),
+		Source:       gt.Source,
+		TempCurrent:  gt.TempCurrent,
+		TempSetpoint: gt.TempSetpoint,
+		TempTarget:   gt.TempTarget,
+		TempHoliday:  gt.TempHoliday,
+		TempMax:      gt.TempMax,
+		TempMin:      gt.TempMin,
+		Mode:         gt.Mode,
+		State:        gt.State,
+	}
+	return req
 }
 
 func (gt *Thermo) SetTemperature(temp float64) {
-	gt.hk.Thermostat.TargetTemperature.SetValue(temp)
+	gt.mu.Lock()
 	gt.TempSetpoint = temp
+	req := gt.commandLocked()
+	gt.mu.Unlock()
 
-	req := gt.Req
-	req.Thermo = gt
 	obj, err := gt.SendReq(req)
 
 	if err != nil {
@@ -108,7 +128,7 @@ func (gt *Thermo) SetTemperature(temp float64) {
 	gt.LoadReqObject(obj)
 }
 func (gt *Thermo) SetState(state int) {
-	gt.hk.Thermostat.TargetHeatingCoolingState.SetValue(state)
+	gt.mu.Lock()
 	switch state {
 	case 1:
 		gt.State = 1
@@ -119,9 +139,9 @@ func (gt *Thermo) SetState(state int) {
 	default:
 		gt.State = 0
 	}
+	req := gt.commandLocked()
+	gt.mu.Unlock()
 
-	req := gt.Req
-	req.Thermo = gt
 	obj, err := gt.SendReq(req)
 
 	if err != nil {

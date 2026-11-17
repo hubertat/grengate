@@ -58,13 +58,20 @@ func (ms *MotionSensor) appendHk() *accessory.A {
 
 // Set applies a pushed state (input server) and shows it in HomeKit.
 func (ms *MotionSensor) Set(state bool) {
+	ms.mu.Lock()
 	ms.State = state
+	ms.mu.Unlock()
 	ms.Sync()
 }
 
 // Sync pushes the state to HomeKit.
 func (ms *MotionSensor) Sync() {
-	ms.hkService.MotionDetected.SetValue(ms.State)
+	ms.syncMu.Lock()
+	defer ms.syncMu.Unlock()
+	ms.mu.Lock()
+	state := ms.State
+	ms.mu.Unlock()
+	ms.hkService.MotionDetected.SetValue(state)
 }
 
 // LoadReqObject applies a read item and pushes the state to HomeKit.
@@ -77,6 +84,8 @@ func (ms *MotionSensor) applyRead(obj ReqObject) (bool, error) {
 	if obj.MotionSensor == nil {
 		return false, fmt.Errorf("MotionSensor: missing MotionSensor object")
 	}
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 	changed := !ms.loaded || ms.State != obj.MotionSensor.State
 	ms.State = obj.MotionSensor.State
 	ms.loaded = true

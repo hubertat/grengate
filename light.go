@@ -47,6 +47,8 @@ func (gl *Light) applyRead(obj ReqObject) (bool, error) {
 	if obj.Light == nil {
 		return false, fmt.Errorf("Light: missing Light object")
 	}
+	gl.mu.Lock()
+	defer gl.mu.Unlock()
 	changed := !gl.loaded || gl.State != obj.Light.State
 	gl.State = obj.Light.State
 	gl.loaded = true
@@ -102,19 +104,26 @@ func (gl *Light) hkTypeName() string {
 }
 
 func (gl *Light) Sync() {
-	gl.hkOn.SetValue(gl.State)
+	gl.syncMu.Lock()
+	defer gl.syncMu.Unlock()
+	gl.mu.Lock()
+	state := gl.State
+	gl.mu.Unlock()
+
+	gl.hkOn.SetValue(state)
 	if gl.hkInUse != nil {
 		// Grenton has no power sensing, so "in use" mirrors the on/off state.
-		gl.hkInUse.SetValue(gl.State)
+		gl.hkInUse.SetValue(state)
 	}
 }
 
 func (gl *Light) Set(state bool) {
-
+	gl.mu.Lock()
 	gl.State = state
-
 	req := gl.Req
-	req.Light = gl
+	req.Light = &Light{CluObject: gl.wireIdentity(), State: state, HkType: gl.HkType}
+	gl.mu.Unlock()
+
 	_, err := gl.SendReq(req)
 
 	if err != nil {

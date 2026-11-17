@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -35,8 +36,22 @@ type CluObject struct {
 
 	clu *Clu `json:"-"`
 
+	// mu guards the device's state fields (everything a read, a push or a HomeKit callback
+	// changes). It is held only for field access: never during HTTP and never while
+	// calling into hap (SetValue), so the hap callback path cannot deadlock on it.
+	mu sync.Mutex
+	// syncMu serialises pushes to HomeKit, so two Syncs of one device cannot interleave
+	// and leave an older state showing. Taken before mu, never inside it.
+	syncMu sync.Mutex
+
 	// loaded is set once a valid read result has been applied.
 	loaded bool
+}
+
+// wireIdentity copies the identity fields the device structs carry on the wire, for
+// command snapshots built under the lock (the snapshot must not point at the live device).
+func (co *CluObject) wireIdentity() CluObject {
+	return CluObject{Id: co.Id, Name: co.Name, Kind: co.Kind}
 }
 
 func (co *CluObject) GetLongId() uint64 {

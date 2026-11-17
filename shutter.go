@@ -33,8 +33,7 @@ type Shutter struct {
 
 	currentPosition int
 	targetPosition  int
-	cancelMovement  chan bool
-	moveTicker      *time.Ticker
+	cancelMovement  chan bool // buffered (1); only sent to while looping, under mu
 	looping         bool
 
 	// State: 0 - stopped; 1 - going up; 2 - going down
@@ -51,7 +50,7 @@ func (sh *Shutter) InitAll() {
 
 	sh.currentPosition = 100
 	sh.targetPosition = 100
-	sh.cancelMovement = make(chan bool)
+	sh.cancelMovement = make(chan bool, 1)
 
 	sh.AppendHk()
 }
@@ -89,21 +88,29 @@ func (sh *Shutter) GetHkState() int {
 
 // Sync sets HK accessory values based on Shutter values
 func (sh *Shutter) Sync() {
-	sh.hk.WindowCovering.CurrentPosition.SetValue(sh.currentPosition)
-	sh.hk.WindowCovering.PositionState.SetValue(sh.GetHkState())
+	sh.syncMu.Lock()
+	defer sh.syncMu.Unlock()
+	sh.mu.Lock()
+	position, state := sh.currentPosition, sh.GetHkState()
+	sh.mu.Unlock()
+
+	sh.hk.WindowCovering.CurrentPosition.SetValue(position)
+	sh.hk.WindowCovering.PositionState.SetValue(state)
 }
 
 // SetPosition check which direction should move and call StartMoving func
 func (sh *Shutter) SetPosition(target int) {
+	sh.mu.Lock()
 	if sh.MaxTime < minShutterMaxTime {
+		maxTime, current := sh.MaxTime, sh.currentPosition
+		sh.mu.Unlock()
 		sh.clu.set.Logf("Shutter %s (%s): move to %d refused, MaxTime %d ms is below %d ms (not read from GATE yet?)",
-			sh.Name, sh.GetMixedId(), target, sh.MaxTime, minShutterMaxTime)
-		sh.hk.WindowCovering.TargetPosition.SetValue(sh.currentPosition)
+			sh.Name, sh.GetMixedId(), target, maxTime, minShutterMaxTime)
+		sh.hk.WindowCovering.TargetPosition.SetValue(current)
 		return
 	}
 
 	sh.clu.set.Debugf("Shutter SetPosition | target: %d\tcurrent: %d\told target: %d\n", target, sh.currentPosition, sh.targetPosition)
-	sh.hk.WindowCovering.TargetPosition.SetValue(target)
 	sh.targetPosition = target
 
 	var cmd shutterCmd
@@ -125,6 +132,8 @@ func (sh *Shutter) SetPosition(target int) {
 			cmd = shutterDown
 		}
 	}
+	period := time.Duration(sh.MaxTime/100) * time.Millisecond
+	sh.mu.Unlock()
 
 	sh.clu.set.Debugf("Shutter setting position cmd: %v\n", cmd)
 
@@ -133,48 +142,60 @@ func (sh *Shutter) SetPosition(target int) {
 		sh.clu.set.Error(fmt.Errorf("Shutter sendCmd: error from sending request:\n%v", err))
 	}
 
-	period, err := time.ParseDuration(fmt.Sprintf("%dms", sh.MaxTime/100))
-	if err != nil {
-		sh.clu.set.Error(err)
-		return
-	}
+	sh.mu.Lock()
 	if sh.looping {
-		sh.cancelMovement <- true
+		// The running loop stops the motor and ends (behaviour kept until stage 4).
+		select {
+		case sh.cancelMovement <- true:
+		default:
+		}
+		sh.mu.Unlock()
 		return
 	}
-	sh.clu.set.Debugf("Shutter starting move ticker period: %s\n", period.String())
-	sh.moveTicker = time.NewTicker(period)
-	go sh.moveLoop()
+	sh.looping = true
+	sh.mu.Unlock()
 
+	sh.clu.set.Debugf("Shutter starting move ticker period: %s\n", period.String())
+	go sh.moveLoop(time.NewTicker(period))
 }
 
-func (sh *Shutter) moveLoop() {
-	sh.looping = true
-
+func (sh *Shutter) moveLoop(ticker *time.Ticker) {
+	defer ticker.Stop()
 	for {
 		select {
 		case <-sh.cancelMovement:
-			sh.sendCmd(shutterStop)
-			sh.moveTicker.Stop()
-			sh.Sync()
-			sh.looping = false
+			sh.endMove()
 			return
-		case <-sh.moveTicker.C:
-			if sh.targetPosition == sh.currentPosition {
-				sh.sendCmd(shutterStop)
-				sh.moveTicker.Stop()
-				sh.Sync()
-				sh.looping = false
-				return
+		case <-ticker.C:
+			sh.mu.Lock()
+			reached := sh.targetPosition == sh.currentPosition
+			if !reached {
+				if sh.currentPosition < sh.targetPosition {
+					sh.currentPosition++
+				} else {
+					sh.currentPosition--
+				}
 			}
-			if sh.currentPosition < sh.targetPosition {
-				sh.currentPosition++
-			} else {
-				sh.currentPosition--
+			sh.mu.Unlock()
+			if reached {
+				sh.endMove()
+				return
 			}
 		}
 	}
+}
 
+// endMove stops the motor and ends the movement loop.
+func (sh *Shutter) endMove() {
+	sh.sendCmd(shutterStop)
+	sh.mu.Lock()
+	sh.looping = false
+	select { // a cancel sent while the STOP was in flight has been served by it
+	case <-sh.cancelMovement:
+	default:
+	}
+	sh.mu.Unlock()
+	sh.Sync()
 }
 
 func (sh *Shutter) sendCmd(cmd shutterCmd) error {
@@ -210,6 +231,8 @@ func (sh *Shutter) applyRead(obj ReqObject) (bool, error) {
 	if obj.Shutter == nil {
 		return false, fmt.Errorf("Shutter: missing Shutter object")
 	}
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
 	changed := !sh.loaded || sh.State != obj.Shutter.State || sh.MaxTime != obj.Shutter.MaxTime
 	sh.State = obj.Shutter.State
 	sh.MaxTime = obj.Shutter.MaxTime
