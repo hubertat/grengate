@@ -20,6 +20,16 @@ func cadenceClu() *Clu {
 	}
 }
 
+// withCadence sets the refresh clock and ThermoCycleInSeconds, in the new write protocol
+// (the cadence applies only there).
+func withCadence(clk *fakeClock, secs int) func(*GrentonSet) {
+	return func(gs *GrentonSet) {
+		gs.clock = clk
+		gs.ThermoCycleInSeconds = secs
+		gs.LegacyWriteScript = false
+	}
+}
+
 // readsPerDevice counts the read items per device id in the given read requests.
 func readsPerDevice(reqs []fakeGateRequest) map[string]int {
 	n := map[string]int{}
@@ -36,8 +46,7 @@ func readsPerDevice(reqs []fakeGateRequest) map[string]int {
 func TestRefresh_ThermostatCadence(t *testing.T) {
 	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	gs, g := newTestSetWith(t, func(gs *GrentonSet) {
-		gs.clock = clk
-		gs.ThermoCycleInSeconds = 60
+		withCadence(clk, 60)(gs)
 	}, cadenceClu())
 	g.DropField(tCLU, "THE0003", "TempCurrent")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -82,8 +91,7 @@ func TestRefresh_ThermostatCadenceToleratesJitter(t *testing.T) {
 	clu := cadenceClu()
 	clu.Therms = clu.Therms[:1]
 	gs, g := newTestSetWith(t, func(gs *GrentonSet) {
-		gs.clock = clk
-		gs.ThermoCycleInSeconds = 60
+		withCadence(clk, 60)(gs)
 	}, clu)
 
 	clk.Advance(300 * time.Millisecond)
@@ -108,8 +116,7 @@ func TestRefresh_ThermostatCadenceToleratesJitter(t *testing.T) {
 func TestRefresh_SkippedObjects(t *testing.T) {
 	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	gs, g, m := newMetricsSet(t, func(gs *GrentonSet) {
-		gs.clock = clk
-		gs.ThermoCycleInSeconds = 60
+		withCadence(clk, 60)(gs)
 	}, cadenceClu())
 	g.DropField(tCLU, "THE0003", "TempCurrent")
 
@@ -144,8 +151,7 @@ func TestRefresh_ThermostatCycleNotAboveRefreshCycle(t *testing.T) {
 			clu := cadenceClu()
 			clu.Therms = clu.Therms[:1]
 			gs, g := newTestSetWith(t, func(gs *GrentonSet) {
-				gs.clock = clk
-				gs.ThermoCycleInSeconds = secs
+				withCadence(clk, secs)(gs)
 			}, clu)
 			for k := 0; k < 3; k++ {
 				if c := gs.Refresh(); c.Skipped != 0 {
@@ -157,5 +163,26 @@ func TestRefresh_ThermostatCycleNotAboveRefreshCycle(t *testing.T) {
 				t.Errorf("thermostat read %d times, want 3", n)
 			}
 		})
+	}
+}
+
+// In the legacy protocol a thermostat command carries setpoint, state and mode from the
+// device state, so thermostats are read in every refresh to keep those values fresh.
+func TestRefresh_LegacyProtocolReadsThermostatsEveryCycle(t *testing.T) {
+	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	clu := cadenceClu()
+	clu.Therms = clu.Therms[:1]
+	gs, g := newTestSetWith(t, func(gs *GrentonSet) {
+		withCadence(clk, 60)(gs)
+		gs.LegacyWriteScript = true
+	}, clu)
+	for k := 0; k < 3; k++ {
+		if c := gs.Refresh(); c.Skipped != 0 {
+			t.Errorf("refresh %d skipped %d", k, c.Skipped)
+		}
+		clk.Advance(10 * time.Second)
+	}
+	if n := readsPerDevice(g.Requests(fakeReadPath))["THE0002"]; n != 3 {
+		t.Errorf("thermostat read %d times, want 3", n)
 	}
 }

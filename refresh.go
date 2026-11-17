@@ -27,11 +27,14 @@ const defaultThermoCycle = 60 * time.Second
 // dueForPoll reports whether a refresh starting at now reads the device, and records when a
 // thermostat was queued. Every device is read in every refresh except a ready thermostat:
 // temperatures move slowly and a thermostat read costs several GATE calls, so it is read
-// only every ThermoCycleInSeconds (concept 3.6). A thermostat that is not ready is read in
-// every refresh, so the not-ready window stays short (concept 3.5). Call with refreshMu held.
+// only about every ThermoCycleInSeconds (concept 3.6). A thermostat that is not ready is
+// read in every refresh, so the not-ready window stays short (concept 3.5). In the legacy
+// write protocol thermostats are read in every refresh: a three-field command is built from
+// the device's setpoint, state and mode, which must not be a cadence old. Call with
+// refreshMu held.
 func (gs *GrentonSet) dueForPoll(d device, now time.Time) bool {
 	th, ok := d.(*Thermo)
-	if !ok {
+	if !ok || gs.LegacyWriteScript {
 		return true
 	}
 	if th.isReady() && !th.lastPoll.IsZero() && !thermoPollDue(now.Sub(th.lastPoll), gs.thermoCycle(), gs.cycle()) {
