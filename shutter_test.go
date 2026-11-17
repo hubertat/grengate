@@ -652,3 +652,132 @@ func TestShutter_LateStopAckIsNotRepeated(t *testing.T) {
 	assertShown(t, sh, shown{40, 40, hkStopped})
 	assertCmds(t, g, "MOVEDOWN", "STOP")
 }
+
+// Failure table, row "per-item error, latest generation": the belief is unchanged, the
+// command is retried once, then given up: the HomeKit target is set to where the motor is
+// believed to end up (here: stopped, so the current position).
+func TestShutter_ItemErrorOnMoveRetriedOnceThenGivenUp(t *testing.T) {
+	checkGoroutines(t)
+	logs := captureLog(t)
+	gs, g, sh, clk := readyShutter(t)
+	g.SetWriteStyle(fakeNewStyle)
+	g.FailItem(tCLU, tSID, "boom")
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "MOVEDOWN")
+	assertShown(t, sh, shown{100, 100, hkStopped})
+	if clk.running() {
+		t.Error("clock running after a move that did not run")
+	}
+	if !strings.Contains(logs.String(), "giving up on target 40") {
+		t.Errorf("give-up not logged:\n%s", logs.String())
+	}
+}
+
+// The retry of a move that got a per-item error runs: the movement goes on as usual.
+func TestShutter_ItemErrorOnMoveRetrySucceeds(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	g.SetWriteStyle(fakeNewStyle)
+	g.FailItem(tCLU, tSID, "boom")
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 40)
+	h.Wait(t) // answered with the per-item error once released
+	g.ClearFailItem(tCLU, tSID)
+	h.Release()
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 40, hkDecreasing})
+	tick(t, gs, 60)
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "MOVEDOWN", "STOP")
+}
+
+// Per-item error on a retarget: the new generation's MOVEUP does not run, nor does its
+// retry; the motor is still believed moving down (the old generation's movement), so the
+// target given up becomes the end stop of that direction, where the clock runs to.
+func TestShutter_ItemErrorOnRetargetGivesUpToEndStop(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	g.SetWriteStyle(fakeNewStyle)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 10)
+	g.FailItem(tCLU, tSID, "boom")
+	hkTarget(t, sh, 95)
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "MOVEUP", "MOVEUP")
+	assertShown(t, sh, shown{90, 0, hkDecreasing})
+	tick(t, gs, 90)
+	settle(t, gs)
+	assertShown(t, sh, shown{0, 0, hkDecreasing})
+	if clk.running() {
+		t.Error("clock running at the end stop")
+	}
+	assertCmds(t, g, "MOVEDOWN", "MOVEUP", "MOVEUP")
+}
+
+// Per-item error on the automatic STOP: retried once, then given up; the motor is believed
+// still moving down, so the target becomes the end stop and no further STOP is sent.
+func TestShutter_ItemErrorOnAutoStopGivesUpToEndStop(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	g.SetWriteStyle(fakeNewStyle)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 59)
+	g.FailItem(tCLU, tSID, "boom")
+	tick(t, gs, 1)
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "STOP", "STOP")
+	assertShown(t, sh, shown{40, 0, hkDecreasing})
+	tick(t, gs, 40)
+	settle(t, gs)
+	assertShown(t, sh, shown{0, 0, hkDecreasing})
+	assertCmds(t, g, "MOVEDOWN", "STOP", "STOP")
+}
+
+// Failure table, row "per-item error, older generation": nothing happens; the newer
+// generation's command decides.
+func TestShutter_ItemErrorOlderGenerationDoesNothing(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	g.SetWriteStyle(fakeNewStyle)
+	g.FailItem(tCLU, tSID, "boom")
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 40)
+	h.Wait(t)
+	g.ClearFailItem(tCLU, tSID)
+	hkTarget(t, sh, 100) // the position: STOP
+	eventually(t, 2*time.Second, sh.sim.inboxHandled, "the simulation to handle the target")
+	h.Release()
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "STOP")
+	assertShown(t, sh, shown{100, 100, hkStopped})
+}
+
+// MOVEUP in flight, STOP requested, MOVEUP acknowledged, STOP fails (per-item error, also on
+// its retry): the motor is believed moving up; the target given up is the end stop above.
+func TestShutter_FailedStopAfterOlderMoveAckLeavesMotorMovingUp(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	g.SetWriteStyle(fakeNewStyle)
+	moveTo(t, gs, sh, 50)
+	hm := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 80)
+	hm.Wait(t)
+	g.FailItem(tCLU, tSID, "boom")
+	hkTarget(t, sh, 50) // STOP
+	eventually(t, 2*time.Second, sh.sim.inboxHandled, "the simulation to handle the target")
+	hm.Release()
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEUP", "STOP", "STOP")
+	assertShown(t, sh, shown{50, 100, hkIncreasing})
+	tick(t, gs, 50)
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 100, hkIncreasing})
+	if clk.running() {
+		t.Error("clock running at the end stop")
+	}
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEUP", "STOP", "STOP")
+}

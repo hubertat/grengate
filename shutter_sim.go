@@ -91,6 +91,8 @@ const (
 type shutterCommand struct {
 	cmd string
 	gen uint64 // movement generation that submitted it
+	// retry: this is the one retry of a command of the same generation that did not run.
+	retry bool
 	// stamp is the completion stamp of its result (once known).
 	stamp uint64
 }
@@ -147,6 +149,8 @@ type generation struct {
 	travel int
 	// stopSent: its automatic STOP was submitted.
 	stopSent bool
+	// gaveUp: a command of it did not run, nor did its retry. It submits nothing more.
+	gaveUp bool
 }
 
 // shutterSim is the simulation of one shutter.
@@ -400,10 +404,20 @@ func (s *shutterSim) submit(c *shutterCommand) {
 	}()
 }
 
-// handleResult takes the result of a command. Only an acknowledgement is evidence.
+// handleResult takes the result of a command. Only an acknowledgement is evidence; a
+// per-item error means the command did not run, which matters for the latest generation
+// only (concept 3.4, failure table).
 func (s *shutterSim) handleResult(c *shutterCommand, r laneResult) {
 	s.cmds = slices.DeleteFunc(s.cmds, func(x *shutterCommand) bool { return x == c })
-	if r.Outcome != OutcomeOK {
+	latest := c.gen == s.gen.n && !s.gen.gaveUp
+	switch r.Outcome {
+	case OutcomeOK:
+	case OutcomeError:
+		if latest {
+			s.didNotRun(c)
+		}
+		return
+	default: // superseded: replaced in the mailbox by a newer command, evidence of nothing
 		return
 	}
 	c.stamp = r.Stamp
@@ -445,6 +459,25 @@ func (s *shutterSim) setBelief(m motorState, stamp uint64) {
 	s.moveGen = 0
 }
 
+// didNotRun handles a command of the latest generation that did not run: it is retried
+// once under the same generation, which keeps the authority meanwhile; if the retry did not
+// run either, the generation gives up.
+func (s *shutterSim) didNotRun(c *shutterCommand) {
+	if !c.retry {
+		s.sh.clu.set.Logf("shutter %s: %s did not run; retrying once", describeDevice(s.sh), c.cmd)
+		s.submit(&shutterCommand{cmd: c.cmd, gen: c.gen, retry: true})
+		return
+	}
+	end := s.pos
+	if s.belief != motorStopped {
+		end = endStop(s.belief)
+	}
+	s.sh.clu.set.Logf("shutter %s: %s did not run after a retry; giving up on target %d: target set to %d (motor believed %v)",
+		describeDevice(s.sh), c.cmd, s.gen.target, end, s.belief)
+	s.gen.gaveUp = true
+	s.setTarget(end)
+}
+
 // claim makes the believed movement generation n's. For the latest generation its travel
 // starts now.
 func (s *shutterSim) claim(n uint64) {
@@ -474,7 +507,7 @@ func (s *shutterSim) checkEnd() {
 // whatever the error of the simulated position.
 func (s *shutterSim) checkAutoStop() {
 	g := &s.gen
-	if g.n == 0 || s.moveGen != g.n || g.stopSent || s.latestBusy() || !s.atTarget() || s.travelLeft() {
+	if g.n == 0 || s.moveGen != g.n || g.stopSent || g.gaveUp || s.latestBusy() || !s.atTarget() || s.travelLeft() {
 		return
 	}
 	g.stopSent = true
@@ -560,7 +593,7 @@ func (s *shutterSim) clockNeeded() bool {
 		return true
 	}
 	g := s.gen
-	return g.n != 0 && s.moveGen == g.n && !g.stopSent && s.travelLeft()
+	return g.n != 0 && s.moveGen == g.n && !g.stopSent && !g.gaveUp && s.travelLeft()
 }
 
 // updateClock starts or stops the clock as needed. One step is MaxTime/100.
