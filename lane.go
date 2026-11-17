@@ -377,27 +377,33 @@ func (l *lane) take() []*laneEntry {
 
 func (l *lane) run() {
 	defer close(l.done)
-	// fromIdle: the worker has sent nothing since it last found the mailbox empty, so the
-	// next request gets the batching window.
-	fromIdle := true
+	// idle: the worker found the mailbox empty and has sent nothing since, so the next
+	// request gets the batching window.
+	idle := true
 	for {
 		if l.ctx.Err() != nil {
 			return
 		}
-		if fromIdle && !l.waitWindow() {
-			return
+		if idle {
+			if l.empty() {
+				select {
+				case <-l.wake:
+					continue
+				case <-l.ctx.Done():
+					return
+				}
+			}
+			// Only the worker takes entries, so what the window waits for is still there.
+			if !l.waitWindow() {
+				return
+			}
+			idle = false
 		}
 		batch := l.take()
 		if batch == nil {
-			fromIdle = true
-			select {
-			case <-l.wake:
-				continue
-			case <-l.ctx.Done():
-				return
-			}
+			idle = true
+			continue
 		}
-		fromIdle = false
 		l.send(batch)
 		l.mu.Lock()
 		l.sending = false
@@ -405,19 +411,19 @@ func (l *lane) run() {
 	}
 }
 
+// empty reports whether the mailbox is empty.
+func (l *lane) empty() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.queue) == 0
+}
+
 // waitWindow runs the batching window when the worker finds work after it was idle, so the
 // callbacks of one HomeKit request (a scene) leave together. Entries that arrive while a
-// request is in flight get no window: they leave as soon as it completes. An empty mailbox
-// (a wake-up left over from such an entry) opens no window. It returns false when the lane
-// stops meanwhile.
+// request is in flight get no window: they leave as soon as it completes. It returns false
+// when the lane stops meanwhile.
 func (l *lane) waitWindow() bool {
 	if l.cfg.window <= 0 {
-		return true
-	}
-	l.mu.Lock()
-	empty := len(l.queue) == 0
-	l.mu.Unlock()
-	if empty {
 		return true
 	}
 	closed := make(chan struct{})
