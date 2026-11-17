@@ -48,14 +48,45 @@ func captureLog(t testing.TB) *syncBuffer {
 	return b
 }
 
-// settle waits (with a deadline) until both lanes are idle and every HomeKit sync queued so
-// far is done: every write finished, its confirm read was applied and HomeKit shows the
-// result. The write lane is checked first, since a finished write queues a read.
+// settle waits (with a deadline) until nothing is left to do and every HomeKit sync queued
+// so far is done: every write finished, its confirm read was applied, the shutter
+// simulations handled everything they were sent, and HomeKit shows the result.
 func settle(t testing.TB, gs *GrentonSet) {
 	t.Helper()
-	eventually(t, 5*time.Second, func() bool { return gs.writer.idle() && gs.reader.idle() },
-		"both lanes to become idle")
+	deadline := time.Now().Add(5 * time.Second)
+	for !quiet(gs) {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the lanes and the shutter simulations to become idle")
+		}
+		time.Sleep(100 * time.Microsecond)
+	}
 	syncHomeKit(t, gs)
+}
+
+// quiet reports whether the shutter simulations and both lanes are idle. Only a submission
+// or an inbox post makes one of them busy again: the shutters are checked first (idle: inbox
+// handled, every command's result handled), then the write lane (a finished write queues a
+// read), then the read lane (a read posts observations to the shutters); a post to a shutter
+// during the checks shows in its post counter, and every submission comes from a shutter, a
+// write completion or the test.
+func quiet(gs *GrentonSet) bool {
+	posts := shutterPosts(gs)
+	for _, sh := range gs.shutters() {
+		if !sh.sim.idle() {
+			return false
+		}
+	}
+	return gs.writer.idle() && gs.reader.idle() && shutterPosts(gs) == posts
+}
+
+func shutterPosts(gs *GrentonSet) uint64 {
+	var n uint64
+	for _, sh := range gs.shutters() {
+		sh.sim.imu.Lock()
+		n += sh.sim.posts
+		sh.sim.imu.Unlock()
+	}
+	return n
 }
 
 // newTestSet builds a GrentonSet wired to a fresh fake GATE without a config file.
@@ -81,6 +112,11 @@ func newTestSetWith(t testing.TB, configure func(gs *GrentonSet), clus ...*Clu) 
 	}
 	if configure != nil {
 		configure(gs)
+	}
+	if gs.shutterClock == nil {
+		// Shutters never tick on their own in tests: a test that needs the clock fires it
+		// (see fakeTimers).
+		gs.shutterClock = newFakeTimers()
 	}
 	gs.InitClus()
 	gs.startWorkers()

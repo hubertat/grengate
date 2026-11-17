@@ -36,7 +36,11 @@ type Shutter struct {
 	cancelMovement  chan bool // buffered (1); only sent to while looping, under mu
 	looping         bool
 
-	// State: 0 - stopped; 1 - going up; 2 - going down
+	// sim is the simulation goroutine's state (shutter_sim.go).
+	sim *shutterSim
+
+	// State is the motor state HomeKit shows: the simulation's belief (0 stopped, 1 going
+	// up, 2 going down). Written by the simulation goroutine only.
 	State   int
 	MaxTime int
 }
@@ -51,6 +55,7 @@ func (sh *Shutter) InitAll() {
 	sh.currentPosition = 100
 	sh.targetPosition = 100
 	sh.cancelMovement = make(chan bool, 1)
+	sh.sim = newShutterSim(sh)
 
 	sh.AppendHk()
 }
@@ -218,10 +223,11 @@ func (sh *Shutter) submitCmdLocked(cmd shutterCmd) <-chan laneResult {
 	return sh.submitCommandLocked(req)
 }
 
-// applyRead applies a read observation. A shutter is ready once a read with State and a
-// usable MaxTime (concept 3.5) has been applied. stamp is unused until the shutter
-// simulation follows observations (stage 4).
-func (sh *Shutter) applyRead(obj ReqObject, sentGen, _ uint64) (ApplyOutcome, error) {
+// applyRead applies a read result. A shutter is ready once a read with State and a usable
+// MaxTime (concept 3.5) has been applied. The observed motor state goes to the simulation
+// goroutine with the read's completion stamp, without waiting for it; the goroutine decides
+// what HomeKit shows (concept 3.4).
+func (sh *Shutter) applyRead(obj ReqObject, sentGen, stamp uint64) (ApplyOutcome, error) {
 	p, err := validShutter(obj)
 	if err != nil {
 		return ApplyInvalid, err
@@ -232,7 +238,7 @@ func (sh *Shutter) applyRead(obj ReqObject, sentGen, _ uint64) (ApplyOutcome, er
 		return ApplyDiscarded, nil
 	}
 	changed := sh.State != *p.State || sh.MaxTime != *p.MaxTime
-	sh.State = *p.State
 	sh.MaxTime = *p.MaxTime
+	sh.sim.observed(*p.State, stamp)
 	return sh.appliedLocked(changed), nil
 }

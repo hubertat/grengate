@@ -39,6 +39,8 @@ type GrentonSet struct {
 	cycleDuration time.Duration
 	// clock drives the refresh scheduler (nil: real time).
 	clock clock
+	// shutterClock drives the shutter simulations (nil: real time).
+	shutterClock timerClock
 
 	registry *registry
 
@@ -171,6 +173,23 @@ func (gs *GrentonSet) startWorkers() {
 		onComplete: gs.writeCompleted,
 	})
 	gs.writer.start()
+
+	clk := gs.shutterClock
+	if clk == nil {
+		clk = realClock{}
+	}
+	for _, sh := range gs.shutters() {
+		sh.sim.start(clk)
+	}
+}
+
+// shutters returns every configured shutter.
+func (gs *GrentonSet) shutters() []*Shutter {
+	var out []*Shutter
+	for _, clu := range gs.Clus {
+		out = append(out, clu.Shutters...)
+	}
+	return out
 }
 
 // Stop stops the workers and sends the buffered metrics. Pending submissions are resolved
@@ -180,6 +199,13 @@ func (gs *GrentonSet) Stop() {
 }
 
 func (gs *GrentonSet) stop() {
+	// Shutter simulations first: they submit commands, and must not retry the commands the
+	// stopping write lane resolves as not run.
+	for _, sh := range gs.shutters() {
+		if sh.sim != nil {
+			sh.sim.stop()
+		}
+	}
 	if gs.reader != nil {
 		gs.reader.stop()
 	}

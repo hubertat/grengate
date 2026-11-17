@@ -84,8 +84,12 @@ func (gs *GrentonSet) startup(ctx context.Context, autotest bool) {
 		gs.Autotest()
 	}
 	c := gs.Refresh()
-	// No HomeKit controller is connected before the server starts, so the syncer cannot be
-	// blocked by one: HomeKit starts with the state just read.
+	// The shutter simulations take what the refresh observed; then no HomeKit controller is
+	// connected before the server starts, so the syncer cannot be blocked by one: HomeKit
+	// starts with the state just read.
+	for _, sh := range gs.shutters() {
+		<-sh.sim.flushed()
+	}
 	<-gs.hkSync.flushed()
 	gs.Logf("startup refresh: %d of %d devices read (%d missing or invalid, %d failed) in %d ms",
 		c.Applied, c.Objects, c.Missing, c.Failed, c.Duration.Milliseconds())
