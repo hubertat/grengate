@@ -115,10 +115,10 @@ func (gt *Thermo) commandLocked() ReqObject {
 func (gt *Thermo) SetTemperature(temp float64) {
 	gt.mu.Lock()
 	gt.TempSetpoint = temp
-	req := gt.commandLocked()
+	result := gt.submitCommandLocked(gt.commandLocked())
 	gt.mu.Unlock()
 
-	gt.sendCommand(req)
+	gt.waitCommand(result)
 }
 func (gt *Thermo) SetState(state int) {
 	gt.mu.Lock()
@@ -132,8 +132,8 @@ func (gt *Thermo) SetState(state int) {
 	default:
 		gt.State = 0
 	}
-	req := gt.commandLocked()
+	result := gt.submitCommandLocked(gt.commandLocked())
 	gt.mu.Unlock()
 
-	gt.sendCommand(req)
+	gt.waitCommand(result)
 }

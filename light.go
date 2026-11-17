@@ -122,7 +122,8 @@ func (gl *Light) Set(state bool) {
 	gl.State = state
 	req := gl.Req
 	req.Light = &Light{CluObject: gl.wireIdentity(), State: state, HkType: gl.HkType}
+	result := gl.submitCommandLocked(req)
 	gl.mu.Unlock()
 
-	gl.sendCommand(req)
+	gl.waitCommand(result)
 }

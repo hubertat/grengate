@@ -65,17 +65,28 @@ func (co *CluObject) GetMixedId() string {
 	return fmt.Sprintf("%s%04d", co.Kind, co.Id)
 }
 
-// sendCommand submits a command to the write lane and waits for its result (HomeKit
-// callbacks still wait for the GATE in this stage). The outcome is logged by the write
-// lane's completion hook; a superseded command is logged here.
-func (co *CluObject) sendCommand(cmd ReqObject) laneResult {
+// submitCommandLocked submits a command snapshot to the write lane. Call it with co.mu held,
+// in the same critical section that changed the state the snapshot was built from: two
+// callbacks for one device then reach the mailbox in the order they changed the device,
+// so the latest state is the one that wins.
+//
+// Lock order: device mu, then lane mu. Submit never blocks, never calls hooks and never
+// takes a device lock; the lane worker never holds its mailbox lock while it calls the hooks
+// that take device locks. Keep it that way.
+func (co *CluObject) submitCommandLocked(cmd ReqObject) <-chan laneResult {
 	if cmd.Cmd == "" {
 		cmd.Cmd = "SET"
 	}
-	gs := co.clu.set
-	r := <-gs.writer.Submit(cmd)[0]
+	return co.clu.set.writer.Submit(cmd)[0]
+}
+
+// waitCommand waits for the result of a submitted command (HomeKit callbacks still wait for
+// the GATE in this stage). Call it without the device lock. The outcome is logged by the
+// write lane's completion hook; a superseded command is logged here.
+func (co *CluObject) waitCommand(ch <-chan laneResult) laneResult {
+	r := <-ch
 	if r.Outcome == OutcomeSuperseded {
-		gs.Debugf("write %s|%s (%s): superseded by a newer command", cmd.Clu, cmd.Id, cmd.Kind)
+		co.clu.set.Debugf("write %s|%s: superseded by a newer command", co.clu.Id, co.GetMixedId())
 	}
 	return r
 }

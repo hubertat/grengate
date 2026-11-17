@@ -133,11 +133,11 @@ func (sh *Shutter) SetPosition(target int) {
 		}
 	}
 	period := time.Duration(sh.MaxTime/100) * time.Millisecond
+	sh.clu.set.Debugf("Shutter setting position cmd: %v\n", cmd)
+	result := sh.submitCmdLocked(cmd)
 	sh.mu.Unlock()
 
-	sh.clu.set.Debugf("Shutter setting position cmd: %v\n", cmd)
-
-	sh.sendCmd(cmd)
+	sh.waitCommand(result)
 
 	sh.mu.Lock()
 	if sh.looping {
@@ -197,6 +197,14 @@ func (sh *Shutter) endMove() {
 
 // sendCmd sends a movement command and waits for its result (logged by the write lane).
 func (sh *Shutter) sendCmd(cmd shutterCmd) {
+	sh.mu.Lock()
+	result := sh.submitCmdLocked(cmd)
+	sh.mu.Unlock()
+	sh.waitCommand(result)
+}
+
+// submitCmdLocked submits a movement command; call with sh.mu held (see submitCommandLocked).
+func (sh *Shutter) submitCmdLocked(cmd shutterCmd) <-chan laneResult {
 	req := sh.Req
 	switch cmd {
 	case shutterUp:
@@ -206,7 +214,7 @@ func (sh *Shutter) sendCmd(cmd shutterCmd) {
 	case shutterStop:
 		req.Cmd = "STOP"
 	}
-	sh.sendCommand(req)
+	return sh.submitCommandLocked(req)
 }
 
 // LoadReqObject applies a read item and pushes the state to HomeKit.
