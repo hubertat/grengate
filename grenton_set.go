@@ -102,6 +102,13 @@ func (gs *GrentonSet) Config(path string) error {
 		gs.HkPath = "hk"
 	}
 
+	gs.initBrokers()
+
+	return nil
+}
+
+// initBrokers creates the read and write brokers from the already resolved settings.
+func (gs *GrentonSet) initBrokers() {
 	gs.broker = GateBroker{}
 	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration)
 	gs.broker.PostPath = gs.Host + gs.ReadPath
@@ -109,8 +116,6 @@ func (gs *GrentonSet) Config(path string) error {
 	gs.setter = GateBroker{}
 	gs.setter.Init(gs, 1, 200*time.Millisecond)
 	gs.setter.PostPath = gs.GetSetPath()
-
-	return nil
 }
 
 // InitClus initialize every clu object, calls inner InitAll and sets pointer to parent struct

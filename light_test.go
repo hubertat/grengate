@@ -4,23 +4,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/brutella/hap/accessory"
 	"github.com/brutella/hap/characteristic"
 )
-
-// newTestClu returns a Clu wired to a GrentonSet whose setter never flushes
-// during a test, so queued write requests can be inspected.
-func newTestClu(lights ...*Light) *Clu {
-	gs := &GrentonSet{}
-	gs.setter.Init(gs, 10, time.Hour, nil, nil, true)
-
-	clu := &Clu{Id: "CLU_012abcde", Lights: lights}
-	gs.Clus = []*Clu{clu}
-	gs.InitClus()
-	return clu
-}
 
 func newTestLight(hkType string) *Light {
 	return &Light{
@@ -44,7 +31,7 @@ func findC(t *testing.T, a *accessory.A, cType string) *characteristic.C {
 }
 
 func TestLight_DefaultHkTypeIsLightbulb(t *testing.T) {
-	clu := newTestClu(newTestLight(""))
+	clu, _ := newTestClu(t, newTestLight(""))
 
 	if got := clu.GetAllHkAcc()[0].Type; got != accessory.TypeLightbulb {
 		t.Errorf("accessory type = %d, want Lightbulb (%d)", got, accessory.TypeLightbulb)
@@ -52,7 +39,7 @@ func TestLight_DefaultHkTypeIsLightbulb(t *testing.T) {
 }
 
 func TestLight_OutletHkTypeCreatesOutlet(t *testing.T) {
-	clu := newTestClu(newTestLight(HkTypeOutlet))
+	clu, _ := newTestClu(t, newTestLight(HkTypeOutlet))
 
 	if got := clu.GetAllHkAcc()[0].Type; got != accessory.TypeOutlet {
 		t.Errorf("accessory type = %d, want Outlet (%d)", got, accessory.TypeOutlet)
@@ -61,7 +48,7 @@ func TestLight_OutletHkTypeCreatesOutlet(t *testing.T) {
 
 func TestLight_OutletKeepsAccessoryId(t *testing.T) {
 	light := newTestLight(HkTypeOutlet)
-	clu := newTestClu(light)
+	clu, _ := newTestClu(t, light)
 
 	if got := clu.GetAllHkAcc()[0].Id; got != light.GetLongId() {
 		t.Errorf("accessory id = %d, want %d", got, light.GetLongId())
@@ -77,7 +64,7 @@ func TestLight_UnknownHkTypeIsRejected(t *testing.T) {
 
 func TestLight_OutletLoadReqObjectUpdatesOnAndInUse(t *testing.T) {
 	light := newTestLight(HkTypeOutlet)
-	newTestClu(light)
+	newTestClu(t, light)
 
 	err := light.LoadReqObject(ReqObject{Kind: "Light", Light: &Light{State: true}})
 	if err != nil {
@@ -93,19 +80,34 @@ func TestLight_OutletLoadReqObjectUpdatesOnAndInUse(t *testing.T) {
 	}
 }
 
-func TestLight_OutletRemoteUpdateQueuesLightRequest(t *testing.T) {
+func TestLight_OutletRemoteUpdateSendsLightRequest(t *testing.T) {
 	light := newTestLight(HkTypeOutlet)
-	clu := newTestClu(light)
+	_, gate := newTestClu(t, light)
+	gate.SetWriteStyle(fakeNewStyle)
 
 	on := findC(t, light.HkAccessory(), characteristic.TypeOn)
 	on.SetValueRequest(true, httptest.NewRequest("PUT", "/characteristics", nil))
 
-	q := clu.set.setter.queue
-	if len(q) != 1 {
-		t.Fatalf("setter queue length = %d, want 1", len(q))
+	reqs := gate.WaitForRequests(t, fakeSetPath, 1)
+	if len(reqs) != 1 {
+		t.Fatalf("set requests = %d, want 1", len(reqs))
 	}
-	if q[0].Kind != "Light" || q[0].Id != "DOU1234" || q[0].Light == nil || !q[0].Light.State {
-		t.Errorf("queued request = %+v, want Kind=Light Id=DOU1234 State=true", q[0])
+	r := reqs[0]
+	if r.IsArray || len(r.Items) != 1 {
+		t.Fatalf("request = %s, want a single object", r.Body)
+	}
+	item := r.Items[0]
+	if item["Kind"] != "Light" || item["Id"] != "DOU1234" || item["Clu"] != "CLU_012abcde" {
+		t.Errorf("request identity = %v", item)
+	}
+	if l, _ := item["Light"].(map[string]any); l == nil || l["State"] != true {
+		t.Errorf("request payload = %v, want Light.State=true", item["Light"])
+	}
+	if got := gate.Payload("CLU_012abcde", "DOU1234")["State"]; got != true {
+		t.Errorf("fake GATE state = %v, want true", got)
+	}
+	if gate.RequestCount(fakeReadPath) != 0 {
+		t.Error("a write must not trigger a read")
 	}
 }
 
