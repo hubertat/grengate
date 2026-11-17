@@ -74,8 +74,17 @@ func (r *syncRecorder) values() []any {
 
 func timersOf(gs *GrentonSet) *fakeTimers { return gs.shutterClock.(*fakeTimers) }
 
-// idle reports whether the simulation goroutine has nothing left to handle.
+// idle reports whether the simulation has nothing left to handle: its inbox is handled and
+// so is the result of every command it submitted.
 func (s *shutterSim) idle() bool {
+	s.imu.Lock()
+	defer s.imu.Unlock()
+	return len(s.inbox) == 0 && !s.handling && s.outstanding == 0
+}
+
+// inboxHandled reports whether everything posted so far is handled (results of commands
+// may still be outstanding).
+func (s *shutterSim) inboxHandled() bool {
 	s.imu.Lock()
 	defer s.imu.Unlock()
 	return len(s.inbox) == 0 && !s.handling
@@ -244,4 +253,320 @@ func TestShutter_SimulationStopsWithSet(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("barrier after Stop not released")
 	}
+}
+
+// readyShutter returns a set with one shutter that has been read (stopped, MaxTime 20000,
+// so one clock step is 200 ms) and a light (DOU0001) to hold the write lane with.
+func readyShutter(t *testing.T) (*GrentonSet, *fakeGate, *Shutter, *fakeTimers) {
+	t.Helper()
+	clu := shutterClu()
+	clu.Lights = []*Light{{CluObject: CluObject{Id: 1, Kind: "DOU", Name: "lamp"}}}
+	gs, g := newTestSet(t, clu)
+	if c := gs.Refresh(); c.Applied != 2 {
+		t.Fatalf("initial refresh = %+v", c)
+	}
+	settle(t, gs)
+	return gs, g, clu.Shutters[0], timersOf(gs)
+}
+
+// hkTarget is a HomeKit write of the shutter's target position; it must be accepted.
+func hkTarget(t *testing.T, sh *Shutter, v int) {
+	t.Helper()
+	syncHomeKit(t, sh.clu.set) // hap characteristics are not synchronised: no HomeKit write during a sync
+	if status := hkWrite(sh.hk.WindowCovering.TargetPosition.C, v); status != 0 {
+		t.Fatalf("target %d: status %d", v, status)
+	}
+}
+
+// tick advances the shutter clock by n steps; each step is handled before the next fires.
+// It does not wait for commands a step submits (settle does).
+func tick(t *testing.T, gs *GrentonSet, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		timersOf(gs).fire(t)
+		for _, sh := range gs.shutters() {
+			waitFor(t, sh.sim.inboxHandled, "the clock step to be handled")
+		}
+	}
+	syncHomeKit(t, gs)
+}
+
+// waitFor polls cond (often: the shutter tests wait for it after every clock step) until it
+// is true, or fails the test after 2 s.
+func waitFor(t *testing.T, cond func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(50 * time.Microsecond)
+	}
+}
+
+// shutterCmds returns the shutter commands the fake GATE received, in order.
+func shutterCmds(g *fakeGate) []string {
+	var out []string
+	for _, r := range g.Requests(fakeSetPath) {
+		for _, it := range r.Items {
+			if it["Kind"] == "Shutter" {
+				out = append(out, it["Cmd"].(string))
+			}
+		}
+	}
+	return out
+}
+
+func assertCmds(t *testing.T, g *fakeGate, want ...string) {
+	t.Helper()
+	if got := shutterCmds(g); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("shutter commands at the GATE = %v, want %v", got, want)
+	}
+}
+
+func assertShown(t *testing.T, sh *Shutter, want shown) {
+	t.Helper()
+	if got := shownBy(sh); got != want {
+		t.Errorf("HomeKit shows %+v, want %+v (current, target, position state)", got, want)
+	}
+}
+
+// A new target returns to HomeKit without waiting for the GATE.
+func TestShutter_NewTargetReturnsWithoutWaiting(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	g.HangAll(fakeSetPath)
+	within(t, 50*time.Millisecond, "HomeKit target while the GATE hangs", func() { hkTarget(t, sh, 40) })
+	g.WaitForRequests(t, fakeSetPath, 1)
+	g.ReleaseAll()
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN")
+}
+
+// Clock starts on acknowledgement, not on submit: the position does not change and the
+// motor is not shown moving before the move is acknowledged.
+func TestShutter_ClockStartsOnAcknowledgement(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 40)
+	h.Wait(t)
+	syncHomeKit(t, gs)
+	if clk.running() {
+		t.Error("clock started before the acknowledgement")
+	}
+	assertShown(t, sh, shown{100, 40, hkStopped})
+
+	h.Release()
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 40, hkDecreasing})
+	if d := clk.fire(t); d != 200*time.Millisecond {
+		t.Errorf("clock step = %v, want 200 ms (MaxTime 20000 / 100)", d)
+	}
+	settle(t, gs)
+	tick(t, gs, 9)
+	assertShown(t, sh, shown{90, 40, hkDecreasing})
+	assertCmds(t, g, "MOVEDOWN")
+}
+
+// Retarget before the move was sent: the newer command replaces it in the mailbox, one
+// command reaches the fake GATE, and the newer target is the one the clock runs to.
+func TestShutter_RetargetBeforeSendIsOneCommand(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	h := g.HoldNext(fakeSetPath)
+	hkWrite(findC(t, gs.Clus[0].Lights[0].HkAccessory(), characteristic.TypeOn), true)
+	h.Wait(t) // the light's command holds the write lane
+	hkTarget(t, sh, 40)
+	hkTarget(t, sh, 60)
+	eventually(t, 2*time.Second, func() bool { return queuedIn(gs.writer, tSID) && sh.sim.inboxHandled() },
+		"the shutter command waiting in the mailbox")
+	h.Release()
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN")
+	tick(t, gs, 40)
+	assertShown(t, sh, shown{60, 60, hkDecreasing})
+	if timersOf(gs).running() {
+		t.Error("clock still running at the target")
+	}
+}
+
+// Retarget while moving: the new command (other direction) is submitted under the new
+// generation; the motor is believed moving the old way until its acknowledgement, which
+// switches the belief.
+func TestShutter_RetargetWhileMovingSwitchesBeliefOnAck(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 20)
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 90)
+	h.Wait(t)
+	tick(t, gs, 5) // still believed moving down
+	assertShown(t, sh, shown{75, 90, hkDecreasing})
+	h.Release()
+	settle(t, gs)
+	assertShown(t, sh, shown{75, 90, hkIncreasing})
+	tick(t, gs, 15)
+	assertShown(t, sh, shown{90, 90, hkIncreasing})
+	assertCmds(t, g, "MOVEDOWN", "MOVEUP")
+}
+
+// A new target in the direction the motor already moves needs no command: the movement
+// belongs to the new generation and runs to the new target.
+func TestShutter_RetargetSameDirectionTakesOverMovement(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 20)
+	hkTarget(t, sh, 20)
+	settle(t, gs)
+	tick(t, gs, 60)
+	assertShown(t, sh, shown{20, 20, hkDecreasing})
+	assertCmds(t, g, "MOVEDOWN")
+}
+
+// An older generation's acknowledgement updates the belief: MOVEUP is in flight, the user
+// asks for STOP, MOVEUP is acknowledged. The motor is believed moving up and the clock runs
+// upwards without a target; the STOP's acknowledgement then stops it.
+func TestShutter_OlderGenerationAckUpdatesBelief(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	moveTo(t, gs, g, sh, 50)
+	hm := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 80)
+	hm.Wait(t)
+	hs := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 50) // the current position: STOP
+	eventually(t, 2*time.Second, sh.sim.inboxHandled, "the simulation to handle the target")
+	hm.Release()
+	hs.Wait(t) // MOVEUP acknowledged, STOP in flight
+	eventually(t, 2*time.Second, func() bool { return clk.running() }, "the clock to start")
+	tick(t, gs, 5)
+	assertShown(t, sh, shown{55, 50, hkIncreasing})
+	hs.Release()
+	settle(t, gs)
+	assertShown(t, sh, shown{55, 55, hkStopped})
+	if clk.running() {
+		t.Error("clock still running after the STOP was acknowledged")
+	}
+
+	// A wall switch then moves it up again: that movement is not MOVEUP's any more.
+	g.SetShutter(tCLU, tSID, 20000, 1)
+	gs.Refresh()
+	settle(t, gs)
+	assertShown(t, sh, shown{55, 55, hkIncreasing})
+	if clk.running() {
+		t.Error("clock runs for a movement grengate did not start")
+	}
+}
+
+// Acknowledgement processed after a newer observation: the move is acknowledged, the
+// confirm read shows the motor stopped and is processed first; the late acknowledgement
+// records that the move ran (no retry) but leaves the belief at "stopped".
+func TestShutter_AckAfterNewerObservationKeepsBelief(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	release := make(chan struct{})
+	sh.sim.resultHook = func(c *shutterCommand, _ laneResult) {
+		if c.cmd == "MOVEDOWN" {
+			<-release
+		}
+	}
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 40)
+	h.Wait(t)
+	g.SetShutter(tCLU, tSID, 20000, 0) // the motor stopped before the confirm read
+	h.Release()
+	eventually(t, 2*time.Second, func() bool {
+		return gs.writer.idle() && gs.reader.idle() && sh.sim.inboxHandled() && g.RequestCount(fakeReadPath) == 2
+	}, "the confirm read to be handled")
+	close(release)
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 100, hkStopped})
+	if clk.running() {
+		t.Error("clock started by the late acknowledgement")
+	}
+	assertCmds(t, g, "MOVEDOWN")
+}
+
+// Externally observed stop: a read shows the shutter stopped; the simulation ends, the
+// position is kept and the target set to it. No STOP is sent.
+func TestShutter_ExternallyObservedStopEndsSimulation(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 30)
+	g.SetShutter(tCLU, tSID, 20000, 0)
+	gs.Refresh()
+	settle(t, gs)
+	assertShown(t, sh, shown{70, 70, hkStopped})
+	if clk.running() {
+		t.Error("clock still running")
+	}
+	assertCmds(t, g, "MOVEDOWN")
+}
+
+// Movement started from a wall switch updates the HomeKit movement state but not the
+// position, as before.
+func TestShutter_WallSwitchMovementKeepsPosition(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	g.SetShutter(tCLU, tSID, 20000, 2)
+	gs.Refresh()
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 100, hkDecreasing})
+	if clk.running() {
+		t.Error("clock runs for a movement grengate did not start")
+	}
+	g.SetShutter(tCLU, tSID, 20000, 0)
+	gs.Refresh()
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 100, hkStopped})
+	assertCmds(t, g)
+}
+
+// moveTo moves the shutter to target: the move is acknowledged and the clock runs to the
+// target, where a read shows the motor stopped.
+func moveTo(t *testing.T, gs *GrentonSet, g *fakeGate, sh *Shutter, target int) {
+	t.Helper()
+	from := shownBy(sh).current
+	hkTarget(t, sh, target)
+	settle(t, gs)
+	tick(t, gs, max(target-from, from-target))
+	g.SetShutter(tCLU, tSID, 20000, 0)
+	gs.Refresh()
+	settle(t, gs)
+	assertShown(t, sh, shown{target, target, hkStopped})
+}
+
+// A late acknowledgement whose movement a newer observation already showed: the read is
+// processed first (the motor moves down, nobody known to have started it, so the clock does
+// not run), then the acknowledgement of MOVEDOWN tells that the movement is ours: the clock
+// runs towards the target.
+func TestShutter_LateAckClaimsObservedMovement(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	release := make(chan struct{})
+	sh.sim.resultHook = func(c *shutterCommand, _ laneResult) {
+		if c.cmd == "MOVEDOWN" {
+			<-release
+		}
+	}
+	hkTarget(t, sh, 40)
+	eventually(t, 2*time.Second, func() bool {
+		return gs.writer.idle() && gs.reader.idle() && sh.sim.inboxHandled() && g.RequestCount(fakeReadPath) == 2
+	}, "the confirm read to be handled")
+	syncHomeKit(t, gs)
+	assertShown(t, sh, shown{100, 40, hkDecreasing})
+	if clk.running() {
+		t.Error("clock runs before grengate knows the movement is its own")
+	}
+	close(release)
+	settle(t, gs)
+	tick(t, gs, 10)
+	assertShown(t, sh, shown{90, 40, hkDecreasing})
 }

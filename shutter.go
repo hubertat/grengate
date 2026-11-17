@@ -31,8 +31,13 @@ type Shutter struct {
 
 	hk ShutterAccessory
 
+	// Guarded by mu. currentPosition is written by the simulation goroutine only;
+	// targetPosition by the HomeKit callback (a new target) and by the simulation (a target
+	// it ends or gives up), the latter only while no newer HomeKit target exists: targetGen
+	// is the movement generation of the latest HomeKit target.
 	currentPosition int
 	targetPosition  int
+	targetGen       uint64
 	cancelMovement  chan bool // buffered (1); only sent to while looping, under mu
 	looping         bool
 
@@ -94,70 +99,41 @@ func (sh *Shutter) GetHkState() int {
 	}
 }
 
-// Sync sets HK accessory values based on Shutter values
+// Sync pushes the target, the position and the movement state to HomeKit.
 func (sh *Shutter) Sync() {
 	sh.syncMu.Lock()
 	defer sh.syncMu.Unlock()
 	sh.mu.Lock()
-	position, state := sh.currentPosition, sh.GetHkState()
+	current, target, state := sh.currentPosition, sh.targetPosition, sh.GetHkState()
 	sh.mu.Unlock()
 
-	sh.hk.WindowCovering.CurrentPosition.SetValue(position)
-	sh.hk.WindowCovering.PositionState.SetValue(state)
+	wc := sh.hk.WindowCovering
+	wc.TargetPosition.SetValue(target)
+	wc.CurrentPosition.SetValue(current)
+	wc.PositionState.SetValue(state)
 }
 
-// SetPosition check which direction should move and call StartMoving func
+// stepDuration is the time the simulated position takes for one percent: MaxTime/100.
+func (sh *Shutter) stepDuration() time.Duration {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	return time.Duration(sh.MaxTime) * time.Millisecond / 100
+}
+
+// SetPosition is the HomeKit write of the target position. It records the target, starts a
+// new movement generation and hands it to the simulation goroutine without waiting for the
+// GATE (concept 3.4). writeGuard refuses it while the shutter is not ready (no MaxTime).
 func (sh *Shutter) SetPosition(target int) {
 	sh.mu.Lock()
 	if !sh.ready { // refused by writeGuard: no usable MaxTime yet
 		sh.mu.Unlock()
 		return
 	}
-
-	sh.clu.set.Debugf("Shutter SetPosition | target: %d\tcurrent: %d\told target: %d\n", target, sh.currentPosition, sh.targetPosition)
+	sh.targetGen++
 	sh.targetPosition = target
-
-	var cmd shutterCmd
-
-	if target == sh.currentPosition {
-		cmd = shutterStop
-	} else {
-		if target > sh.currentPosition {
-			if target == 100 {
-				sh.clu.set.Debugf("Shutter || going up and target == 100, setting current to 0")
-				sh.currentPosition = 0
-			}
-			cmd = shutterUp
-		} else {
-			if target == 0 {
-				sh.clu.set.Debugf("Shutter || going down and target == 0, setting current to 100")
-				sh.currentPosition = 100
-			}
-			cmd = shutterDown
-		}
-	}
-	period := time.Duration(sh.MaxTime/100) * time.Millisecond
-	sh.clu.set.Debugf("Shutter setting position cmd: %v\n", cmd)
-	result := sh.submitCmdLocked(cmd)
+	sh.sim.newTarget(sh.targetGen, target)
 	sh.mu.Unlock()
-
-	sh.waitCommand(result)
-
-	sh.mu.Lock()
-	if sh.looping {
-		// The running loop stops the motor and ends (behaviour kept until stage 4).
-		select {
-		case sh.cancelMovement <- true:
-		default:
-		}
-		sh.mu.Unlock()
-		return
-	}
-	sh.looping = true
-	sh.mu.Unlock()
-
-	sh.clu.set.Debugf("Shutter starting move ticker period: %s\n", period.String())
-	go sh.moveLoop(time.NewTicker(period))
+	sh.clu.set.hkSync.mark(sh) // see hkSyncer: a sync in progress may have overwritten the write
 }
 
 func (sh *Shutter) moveLoop(ticker *time.Ticker) {
