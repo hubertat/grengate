@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net/http/httptest"
 	"runtime"
 	"strings"
 	"sync"
@@ -66,6 +65,13 @@ func (c *fakeTimers) fire(t testing.TB) time.Duration {
 	return tm.d
 }
 
+// values returns the recorded values.
+func (r *syncRecorder) values() []any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]any(nil), r.vals...)
+}
+
 func timersOf(gs *GrentonSet) *fakeTimers { return gs.shutterClock.(*fakeTimers) }
 
 // idle reports whether the simulation goroutine has nothing left to handle.
@@ -117,42 +123,54 @@ const (
 	hkDecreasing = characteristic.PositionStateDecreasing
 )
 
-func newTestShutter(maxTime int) *Shutter {
-	return &Shutter{
-		CluObject: CluObject{Id: 7, Kind: "ROL", Name: "blind"},
-		MaxTime:   maxTime,
-	}
-}
+// Move refused while MaxTime is unknown (concept 3.5): a shutter that was never read, or
+// whose read had no usable MaxTime, refuses a move with an error status at once; nothing is
+// sent, the refusal is logged, a read of the shutter is queued and HomeKit keeps its target.
+func TestShutter_MoveRefusedWhileNotReady(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		prep func(gs *GrentonSet, g *fakeGate)
+	}{
+		{"never read", func(*GrentonSet, *fakeGate) {}},
+		{"MaxTime 0", func(gs *GrentonSet, g *fakeGate) { g.SetShutter(tCLU, tSID, 0, 0); gs.Refresh() }},
+		{"MaxTime 99", func(gs *GrentonSet, g *fakeGate) { g.SetShutter(tCLU, tSID, 99, 0); gs.Refresh() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkGoroutines(t)
+			logs := captureLog(t)
+			clu := shutterClu()
+			gs, g := newTestSet(t, clu)
+			sh := clu.Shutters[0]
+			tc.prep(gs, g)
+			settle(t, gs)
+			reads := g.RequestCount(fakeReadPath)
+			targetSyncs := recordSyncs(sh.hk.WindowCovering.TargetPosition.C)
 
-func TestShutter_MoveRefusedWithoutMaxTime(t *testing.T) {
-	logs := captureLog(t)
-	sh := newTestShutter(0)
-	clu := &Clu{Id: "CLU_012abcde", Shutters: []*Shutter{sh}}
-	_, gate := newTestSet(t, clu)
-
-	target := sh.hk.WindowCovering.TargetPosition
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		target.SetValueRequest(0, httptest.NewRequest("PUT", "/characteristics", nil))
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("move with MaxTime 0 did not return at once")
-	}
-
-	if got := target.Value(); got != 100 {
-		t.Errorf("HomeKit target = %v, want 100 (current position)", got)
-	}
-	if n := gate.RequestCount(""); n != 0 {
-		t.Errorf("fake GATE received %d requests, want 0", n)
-	}
-	if !strings.Contains(logs.String(), "MaxTime") {
-		t.Errorf("refusal not logged: %q", logs.String())
-	}
-	if sh.looping {
-		t.Error("move loop started")
+			var status int
+			within(t, 50*time.Millisecond, "refused move", func() {
+				status = hkWrite(sh.hk.WindowCovering.TargetPosition.C, 0)
+			})
+			if status != hkNoResponse {
+				t.Errorf("status = %d, want %d", status, hkNoResponse)
+			}
+			settle(t, gs)
+			if got := shownBy(sh); got != (shown{100, 100, hkStopped}) {
+				t.Errorf("HomeKit shows %+v, want the untouched defaults", got)
+			}
+			if v := targetSyncs.values(); len(v) != 0 {
+				t.Errorf("TargetPosition synced %v after a refused move", v)
+			}
+			if n := g.RequestCount(fakeSetPath); n != 0 {
+				t.Errorf("set requests = %d, want 0", n)
+			}
+			rs := g.Requests(fakeReadPath)[reads:]
+			if len(rs) != 1 || rs[0].Items[0]["Id"] != tSID {
+				t.Errorf("reads after the refusal = %v, want one read of the shutter", rs)
+			}
+			if !strings.Contains(logs.String(), "move to 0 refused") {
+				t.Errorf("refusal not logged:\n%s", logs.String())
+			}
+		})
 	}
 }
 

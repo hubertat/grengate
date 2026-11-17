@@ -74,6 +74,8 @@ func (sh *Shutter) AppendHk() {
 	sh.hk.WindowCovering.TargetPosition.SetValue(sh.targetPosition)
 	sh.hk.WindowCovering.PositionState.SetValue(sh.GetHkState())
 
+	// A move needs MaxTime (concept 3.5): refused until the shutter was read.
+	sh.hk.WindowCovering.TargetPosition.SetValueRequestFunc = sh.writeGuard("move")
 	sh.hk.WindowCovering.TargetPosition.OnValueRemoteUpdate(sh.SetPosition)
 	sh.guardReads(sh.hk.A)
 
@@ -107,12 +109,8 @@ func (sh *Shutter) Sync() {
 // SetPosition check which direction should move and call StartMoving func
 func (sh *Shutter) SetPosition(target int) {
 	sh.mu.Lock()
-	if sh.MaxTime < minShutterMaxTime {
-		maxTime, current := sh.MaxTime, sh.currentPosition
+	if !sh.ready { // refused by writeGuard: no usable MaxTime yet
 		sh.mu.Unlock()
-		sh.clu.set.Logf("Shutter %s (%s): move to %d refused, MaxTime %d ms is below %d ms (not read from GATE yet?)",
-			sh.Name, sh.GetMixedId(), target, maxTime, minShutterMaxTime)
-		sh.hk.WindowCovering.TargetPosition.SetValue(current)
 		return
 	}
 
