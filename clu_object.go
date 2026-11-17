@@ -212,14 +212,3 @@ func (co *CluObject) refuseWrite(what string) {
 		co.Name, clu.Id, co.GetMixedId(), what)
 	clu.set.reader.Submit(co.readRequest())
 }
-
-// waitCommand waits for the result of a submitted command (the shutter still waits for the
-// GATE in this stage). Call it without the device lock. The outcome is logged by the write
-// lane's completion hook; a superseded command is logged here.
-func (co *CluObject) waitCommand(ch <-chan laneResult) laneResult {
-	r := <-ch
-	if r.Outcome == OutcomeSuperseded {
-		co.clu.set.Debugf("write %s|%s: superseded by a newer command", co.clu.Id, co.GetMixedId())
-	}
-	return r
-}

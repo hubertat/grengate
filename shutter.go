@@ -13,14 +13,6 @@ import (
 // the simulated position advances every MaxTime/100 ms.
 const minShutterMaxTime = 100
 
-type shutterCmd int
-
-const (
-	shutterUp shutterCmd = iota
-	shutterDown
-	shutterStop
-)
-
 type ShutterAccessory struct {
 	*accessory.A
 
@@ -38,8 +30,6 @@ type Shutter struct {
 	currentPosition int
 	targetPosition  int
 	targetGen       uint64
-	cancelMovement  chan bool // buffered (1); only sent to while looping, under mu
-	looping         bool
 
 	// sim is the simulation goroutine's state (shutter_sim.go).
 	sim *shutterSim
@@ -59,7 +49,6 @@ func (sh *Shutter) InitAll() {
 
 	sh.currentPosition = 100
 	sh.targetPosition = 100
-	sh.cancelMovement = make(chan bool, 1)
 	sh.sim = newShutterSim(sh)
 
 	sh.AppendHk()
@@ -134,67 +123,6 @@ func (sh *Shutter) SetPosition(target int) {
 	sh.sim.newTarget(sh.targetGen, target)
 	sh.mu.Unlock()
 	sh.clu.set.hkSync.mark(sh) // see hkSyncer: a sync in progress may have overwritten the write
-}
-
-func (sh *Shutter) moveLoop(ticker *time.Ticker) {
-	defer ticker.Stop()
-	for {
-		select {
-		case <-sh.cancelMovement:
-			sh.endMove()
-			return
-		case <-ticker.C:
-			sh.mu.Lock()
-			reached := sh.targetPosition == sh.currentPosition
-			if !reached {
-				if sh.currentPosition < sh.targetPosition {
-					sh.currentPosition++
-				} else {
-					sh.currentPosition--
-				}
-			}
-			sh.mu.Unlock()
-			if reached {
-				sh.endMove()
-				return
-			}
-		}
-	}
-}
-
-// endMove stops the motor and ends the movement loop.
-func (sh *Shutter) endMove() {
-	sh.sendCmd(shutterStop)
-	sh.mu.Lock()
-	sh.looping = false
-	select { // a cancel sent while the STOP was in flight has been served by it
-	case <-sh.cancelMovement:
-	default:
-	}
-	sh.mu.Unlock()
-	sh.Sync()
-}
-
-// sendCmd sends a movement command and waits for its result (logged by the write lane).
-func (sh *Shutter) sendCmd(cmd shutterCmd) {
-	sh.mu.Lock()
-	result := sh.submitCmdLocked(cmd)
-	sh.mu.Unlock()
-	sh.waitCommand(result)
-}
-
-// submitCmdLocked submits a movement command; call with sh.mu held (see submitCommandLocked).
-func (sh *Shutter) submitCmdLocked(cmd shutterCmd) <-chan laneResult {
-	req := sh.Req
-	switch cmd {
-	case shutterUp:
-		req.Cmd = "MOVEUP"
-	case shutterDown:
-		req.Cmd = "MOVEDOWN"
-	case shutterStop:
-		req.Cmd = "STOP"
-	}
-	return sh.submitCommandLocked(req)
 }
 
 // applyRead applies a read result. A shutter is ready once a read with State and a usable

@@ -41,7 +41,7 @@ func TestWrite_SuccessfulWriteLogsNoError(t *testing.T) {
 
 		hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
 		hkWrite(clu.Therms[0].hk.Thermostat.TargetTemperature.C, 23.0)
-		clu.Shutters[0].sendCmd(shutterStop)
+		hkWrite(clu.Shutters[0].hk.WindowCovering.TargetPosition.C, 50)
 		settle(t, gs)
 
 		if n := g.RequestCount(fakeSetPath); n != 3 {
@@ -226,7 +226,7 @@ func TestWrite_CommandEntersMailboxUnderDeviceLock(t *testing.T) {
 	calls := []func(){
 		func() { light.Set(true) }, func() { light.Set(false) },
 		func() { thermo.SetTemperature(22) }, func() { thermo.SetState(1) },
-		func() { shutter.sendCmd(shutterUp) }, func() { shutter.sendCmd(shutterStop) },
+		func() { shutter.SetPosition(30) }, func() { shutter.SetPosition(60) },
 	}
 	var wg sync.WaitGroup
 	for _, call := range calls {
