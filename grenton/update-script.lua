@@ -4,6 +4,8 @@
 --   array in  -> array out, one acknowledgement per item, same order, no holes
 -- An acknowledgement is {Clu, Id, Kind} plus Error (string) when the item failed.
 -- There is no read-back after a set.
+-- Errors raised here use level 0, so Error carries the bare message without a
+-- "[string ...]:<line>:" prefix; errors raised by execute() are passed on as they are.
 
 local req = GATE_HTTP->homebridge->RequestBody
 
@@ -25,31 +27,29 @@ function SetLight(clu, id, light)
 	end
 end
 
+-- Thermostat features set by a command, in the order they are set.
+local ThermoFields = {
+	{ name = "TempSetpoint", feature = 3 },
+	{ name = "State", feature = 6 },
+	{ name = "Mode", feature = 8 },
+}
+
 function SetThermo(clu, id, thermo)
-	local n = 0
-
-	-- only the fields present in the command are set
-	if thermo.TempSetpoint ~= nil then
-		local v = tonumber(thermo.TempSetpoint)
-		if v == nil then error("TempSetpoint is not a number") end
-		_G[clu]:execute(0, id .. ":set(3, " .. v .. ")")
-		n = n + 1
+	-- Only the fields present in the command are set. All of them are checked before the
+	-- first one is set, so a bad item changes nothing.
+	local sets = {}
+	for _, f in ipairs(ThermoFields) do
+		if thermo[f.name] ~= nil then
+			local v = tonumber(thermo[f.name])
+			if v == nil then error(f.name .. " is not a number", 0) end
+			table.insert(sets, id .. ":set(" .. f.feature .. ", " .. v .. ")")
+		end
 	end
-	if thermo.State ~= nil then
-		local v = tonumber(thermo.State)
-		if v == nil then error("State is not a number") end
-		_G[clu]:execute(0, id .. ":set(6, " .. v .. ")")
-		n = n + 1
+	if #sets == 0 then
+		error("Thermo command has no fields", 0)
 	end
-	if thermo.Mode ~= nil then
-		local v = tonumber(thermo.Mode)
-		if v == nil then error("Mode is not a number") end
-		_G[clu]:execute(0, id .. ":set(8, " .. v .. ")")
-		n = n + 1
-	end
-
-	if n == 0 then
-		error("Thermo command has no fields")
+	for _, cmd in ipairs(sets) do
+		_G[clu]:execute(0, cmd)
 	end
 end
 
@@ -84,25 +84,26 @@ function ProcessItem(item)
 
 	ok, err = pcall(function()
 		if item.Clu == nil or _G[item.Clu] == nil then
-			error("unknown CLU: " .. tostring(item.Clu))
+			error("unknown CLU: " .. tostring(item.Clu), 0)
 		end
 		if item.Id == nil then
-			error("missing Id")
+			error("missing Id", 0)
 		end
 
 		if item.Kind == "Light" then
-			if type(item.Light) ~= "table" then error("missing Light payload") end
+			if type(item.Light) ~= "table" then error("missing Light payload", 0) end
+			if type(item.Light.State) ~= "boolean" then error("Light.State is not a boolean", 0) end
 			SetLight(item.Clu, item.Id, item.Light)
 		elseif item.Kind == "Thermo" then
-			if type(item.Thermo) ~= "table" then error("missing Thermo payload") end
+			if type(item.Thermo) ~= "table" then error("missing Thermo payload", 0) end
 			SetThermo(item.Clu, item.Id, item.Thermo)
 		elseif item.Kind == "Shutter" then
 			if item.Cmd ~= "MOVEUP" and item.Cmd ~= "MOVEDOWN" and item.Cmd ~= "STOP" then
-				error("unknown shutter Cmd: " .. tostring(item.Cmd))
+				error("unknown shutter Cmd: " .. tostring(item.Cmd), 0)
 			end
 			SetShutter(item.Clu, item.Id, item.Cmd)
 		else
-			error("unknown Kind: " .. tostring(item.Kind))
+			error("unknown Kind: " .. tostring(item.Kind), 0)
 		end
 	end)
 
