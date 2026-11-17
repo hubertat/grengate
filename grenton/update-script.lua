@@ -2,16 +2,29 @@
 -- Contract: the response has the shape of the request (see README.md).
 --   object in -> acknowledgement object out
 --   array in  -> array out, one acknowledgement per item, same order, no holes
--- An acknowledgement is {Clu, Id, Kind} plus Error (string) when the item failed.
+-- An acknowledgement is {Clu, Id, Kind} plus Error (string) when the item failed, and
+-- Uncertain = true when it failed after the GATE had called the CLU for it (the CLU may
+-- have acted, e.g. execute() timed out after the CLU ran it, or a thermostat's setpoint was
+-- set before its state failed). Without Uncertain, nothing of the item ran.
 -- There is no read-back after a set.
 -- Errors raised here use level 0, so Error carries the bare message without a
 -- "[string ...]:<line>:" prefix; errors raised by execute() are passed on as they are.
 
 local req = GATE_HTTP->homebridge->RequestBody
 
+-- Set when the current item calls the CLU; reset per item by ProcessItem.
+local calledClu = false
+
+-- Exec runs cmd on the CLU and records that the item called it.
+function Exec(clu, cmd)
+	calledClu = true
+	return _G[clu]:execute(0, cmd)
+end
+
 function SetLight(clu, id, light)
 	-- temporary workaround for fibaro wall plug
 	if id == "TMP0001" then
+		calledClu = true
 		if light.State == true then
 			CLU_GRENTON_Rs->fib_wallplug1_switch(true)
 		else
@@ -21,9 +34,9 @@ function SetLight(clu, id, light)
 	end
 
 	if light.State == true then
-		_G[clu]:execute(0, id .. ":set(0, 1)")
+		Exec(clu, id .. ":set(0, 1)")
 	else
-		_G[clu]:execute(0, id .. ":set(0, 0)")
+		Exec(clu, id .. ":set(0, 0)")
 	end
 end
 
@@ -49,20 +62,20 @@ function SetThermo(clu, id, thermo)
 		error("Thermo command has no fields", 0)
 	end
 	for _, cmd in ipairs(sets) do
-		_G[clu]:execute(0, cmd)
+		Exec(clu, cmd)
 	end
 end
 
 function SetShutter(clu, id, cmd)
 
 	if cmd == "MOVEUP" then
-		_G[clu]:execute(0, id .. ":execute(0, 0)")
+		Exec(clu, id .. ":execute(0, 0)")
 	end
 	if cmd == "MOVEDOWN" then
-		_G[clu]:execute(0, id .. ":execute(1, 0)")
+		Exec(clu, id .. ":execute(1, 0)")
 	end
 	if cmd == "STOP" then
-		_G[clu]:execute(0, id .. ":execute(3, 0)")
+		Exec(clu, id .. ":execute(3, 0)")
 	end
 
 end
@@ -82,6 +95,7 @@ function ProcessItem(item)
 	ack.Id = item.Id
 	ack.Kind = item.Kind
 
+	calledClu = false
 	ok, err = pcall(function()
 		if item.Clu == nil or _G[item.Clu] == nil then
 			error("unknown CLU: " .. tostring(item.Clu), 0)
@@ -109,6 +123,9 @@ function ProcessItem(item)
 
 	if not ok then
 		ack.Error = tostring(err)
+		if calledClu then
+			ack.Uncertain = true
+		end
 	end
 
 	return ack

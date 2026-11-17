@@ -31,14 +31,14 @@ package main
 //
 // Writes answer in one of two styles (SetWriteStyle):
 //
-//	fakeOldStyle  update-script.lua today: a single object {Clu, Id, Kind, <Kind>: read-back payload};
-//	              an unknown device or a FailItem device gives "{}". Array bodies are processed
-//	              item by item and answered with an array of such objects (the old script would
-//	              not do that; it is only here so tests can probe).
+//	fakeOldStyle  the old update-script.lua: a single object {Clu, Id, Kind, <Kind>: read-back payload};
+//	              an unknown device or a FailItem device gives "{}". An array body is answered
+//	              with "{}" and nothing runs, as the old script does (it finds no Clu in it).
 //	fakeNewStyle  concept 3.7: answer has the shape of the request, object in -> ack object out,
 //	              array in -> array of acks in request order. Ack = {Clu, Id, Kind} plus "Error"
-//	              when the item failed (unknown device, FailItem). A thermostat item sets only
-//	              the fields present in it.
+//	              when the item failed (unknown device, FailItem), plus "Uncertain": true when
+//	              the item failed after the CLU was called (FailItemUncertain: the command runs).
+//	              A thermostat item sets only the fields present in it.
 //
 // Controlling behaviour (path is fakeReadPath, fakeSetPath or "" for both):
 //
@@ -52,7 +52,7 @@ package main
 //	g.ClearRules()                  drops delays, pending holds/failures and releases held requests
 //
 // Device manipulation: Omit/Unomit (left out of read responses), DropPayload /
-// DropField (invalid payloads), FailItem / ClearFailItem (per-item error on
+// DropField (invalid payloads), FailItem / FailItemUncertain / ClearFailItem (per-item error on
 // writes and an empty read item), Payload (inspect state), SetShutter with maxTime 0.
 //
 // Inspection: g.Requests(path), g.RequestCount(path), g.WaitForRequests(t, path, n)
@@ -99,6 +99,7 @@ type fakeDevice struct {
 	Payload       map[string]any // nil: device has no payload object
 	omitted       bool
 	failMsg       string
+	failUncertain bool // FailItemUncertain: the command runs, then the item reports Error with Uncertain
 }
 
 // heldRequest is a handle for a request held by HoldNext.
@@ -257,7 +258,14 @@ func (g *fakeGate) FailItem(clu, id, msg string) {
 	g.with(clu, id, func(d *fakeDevice) { d.failMsg = msg })
 }
 func (g *fakeGate) ClearFailItem(clu, id string) {
-	g.with(clu, id, func(d *fakeDevice) { d.failMsg = "" })
+	g.with(clu, id, func(d *fakeDevice) { d.failMsg, d.failUncertain = "", false })
+}
+
+// FailItemUncertain makes writes to the device take effect and then fail per item with msg
+// and Uncertain, as the new script reports an error raised once the GATE had called the CLU
+// (new style; old style: empty object). Cleared by ClearFailItem.
+func (g *fakeGate) FailItemUncertain(clu, id, msg string) {
+	g.with(clu, id, func(d *fakeDevice) { d.failMsg, d.failUncertain = msg, true })
 }
 
 // Payload returns a copy of the device payload.
@@ -530,6 +538,9 @@ func (g *fakeGate) readLocked(rec fakeGateRequest) any {
 }
 
 func (g *fakeGate) writeLocked(rec fakeGateRequest) any {
+	if rec.IsArray && g.style == fakeOldStyle {
+		return map[string]any{} // the old script finds no Clu in an array body: runs nothing, answers {}
+	}
 	acks := make([]any, 0, len(rec.Items))
 	for _, item := range rec.Items {
 		acks = append(acks, g.writeItemLocked(item))
@@ -547,7 +558,7 @@ func (g *fakeGate) writeItemLocked(item map[string]any) any {
 	clu, id, kind := itemKey(item)
 	d, ok := g.devices[deviceKey(clu, id)]
 	ack := map[string]any{"Clu": clu, "Id": id, "Kind": kind}
-	if !ok || d.failMsg != "" {
+	if !ok || (d.failMsg != "" && !d.failUncertain) {
 		if g.style == fakeNewStyle {
 			msg := "unknown device"
 			if ok {
@@ -591,6 +602,13 @@ func (g *fakeGate) writeItemLocked(item map[string]any) any {
 		}
 	}
 
+	if d.failUncertain {
+		if g.style == fakeNewStyle {
+			ack["Error"], ack["Uncertain"] = d.failMsg, true
+			return ack
+		}
+		return map[string]any{}
+	}
 	if g.style == fakeNewStyle {
 		return ack
 	}

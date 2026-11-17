@@ -224,6 +224,11 @@ type lane struct {
 	// sending: the worker took entries and has not finished delivering their results.
 	sending bool
 
+	// hintAt is when the old-script hint was last logged; hintsHeld counts the occurrences
+	// not logged since (rate limit). Worker only.
+	hintAt    time.Time
+	hintsHeld int
+
 	wake   chan struct{}
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -437,6 +442,27 @@ func (l *lane) waitWindow() bool {
 	}
 }
 
+// oldScriptHintEvery is the most often the old-script hint is logged.
+const oldScriptHintEvery = time.Minute
+
+// oldScriptHint logs, at most once per oldScriptHintEvery, that an array write request was
+// answered by an object: the old update script, which runs nothing for an array, is the
+// likely cause (new protocol deployed before the new script).
+func (l *lane) oldScriptHint() {
+	now := time.Now()
+	if !l.hintAt.IsZero() && now.Sub(l.hintAt) < oldScriptHintEvery {
+		l.hintsHeld++
+		return
+	}
+	more := ""
+	if l.hintsHeld > 0 {
+		more = fmt.Sprintf(" (%d more since the last report)", l.hintsHeld)
+	}
+	l.hintAt, l.hintsHeld = now, 0
+	l.cfg.logf("ERROR: write lane: the GATE answered an array write request with an object%s, the old update-script.lua does that and runs nothing. "+
+		"Deploy grenton/update-script.lua, or set \"LegacyWriteScript\": true", more)
+}
+
 // idle reports whether the mailbox is empty and no request is being sent or completed
 // (its hooks have run and its results are delivered).
 func (l *lane) idle() bool {
@@ -488,6 +514,9 @@ func (l *lane) send(batch []*laneEntry) {
 		l.cfg.debugf("%s lane: response body: %s", l.cfg.kind, resp)
 		var results []laneResult
 		if l.cfg.kind == writeLane {
+			if l.cfg.asArray && oldScriptAnswer(resp) {
+				l.oldScriptHint()
+			}
 			results, err = decodeWriteResponse(batch, resp)
 		} else {
 			var skipped []error

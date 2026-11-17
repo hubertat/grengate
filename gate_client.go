@@ -103,12 +103,14 @@ func decodeReadResponse(entries []*laneEntry, body []byte) (out []laneResult, sk
 
 // writeAck is one acknowledgement item of a write response. The old update-script.lua
 // answers with a read-back payload instead, which is ignored: a write response is never
-// loaded as device state.
+// loaded as device state. Uncertain is set by the new script with Error when the item failed
+// after the GATE had called the CLU, so the command may have run.
 type writeAck struct {
-	Clu   string
-	Id    string
-	Kind  string
-	Error *string
+	Clu       string
+	Id        string
+	Kind      string
+	Error     *string
+	Uncertain bool
 }
 
 // decodeWriteResponse turns a write response into one result per entry. It accepts both
@@ -117,6 +119,7 @@ type writeAck struct {
 //
 //   - item without Error: acknowledged;
 //   - item with Error: per-item error (the command did not run);
+//   - item with Error and Uncertain: the item failed after the CLU was called: uncertain;
 //   - object with Error and no identity: the whole request failed, every entry gets that error;
 //   - entry without an item (including the old script's "{}" for an unknown CLU): uncertain;
 //   - a body that is neither an object nor an array of objects: error returned, the caller
@@ -160,6 +163,8 @@ func decodeWriteResponse(entries []*laneEntry, body []byte) ([]laneResult, error
 		switch {
 		case !ok:
 			out[i] = laneResult{Outcome: OutcomeUncertain, Err: fmt.Errorf("%s|%s not acknowledged in write response", e.obj.Clu, e.obj.Id)}
+		case a.Error != nil && a.Uncertain:
+			out[i] = laneResult{Outcome: OutcomeUncertain, Err: fmt.Errorf("GATE error for %s|%s after calling the CLU: %s", e.obj.Clu, e.obj.Id, *a.Error)}
 		case a.Error != nil:
 			out[i] = laneResult{Outcome: OutcomeError, Err: fmt.Errorf("GATE error for %s|%s: %s", e.obj.Clu, e.obj.Id, *a.Error)}
 		default:
@@ -167,4 +172,16 @@ func decodeWriteResponse(entries []*laneEntry, body []byte) ([]laneResult, error
 		}
 	}
 	return out, nil
+}
+
+// oldScriptAnswer reports whether the response to an array write request is an object
+// without an Error: what the old update-script.lua answers to an array ("{}", nothing run).
+// The new script answers an array with an array.
+func oldScriptAnswer(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false
+	}
+	var obj struct{ Error *string }
+	return json.Unmarshal(trimmed, &obj) == nil && obj.Error == nil
 }

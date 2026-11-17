@@ -380,3 +380,61 @@ func TestProtocol_ShutterInArrayRequests(t *testing.T) {
 		}
 	}
 }
+
+// A move whose item failed after the GATE called the CLU (Error with Uncertain) may have
+// run: it is reconciled by the confirm read instead of being retried. Here the read shows
+// the motor moving down, so the clock runs to the target and the automatic STOP follows.
+func TestProtocol_ShutterItemErrorAfterCluCallIsReconciled(t *testing.T) {
+	checkGoroutines(t)
+	clu := shutterClu()
+	gs, g := newTestSetWith(t, withNewProtocol(5), clu)
+	g.SetWriteStyle(fakeNewStyle)
+	gs.Refresh()
+	settle(t, gs)
+	sh := clu.Shutters[0]
+
+	g.FailItemUncertain(tCLU, tSID, "CLU did not answer") // the move runs, then the item fails
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	g.ClearFailItem(tCLU, tSID)
+	assertCmds(t, g, "MOVEDOWN")
+	assertShown(t, sh, shown{100, 40, hkDecreasing})
+	tick(t, gs, 60)
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP")
+}
+
+// The new protocol against the old update script: the old script answers an array with
+// "{}" and runs nothing. Every command is uncertain, HomeKit returns to the real state after
+// the confirm read, and the log says what is wrong, once per minute at most.
+func TestProtocol_NewProtocolAgainstOldScript(t *testing.T) {
+	logs := captureLog(t)
+	clu := lightsClu(2)
+	gs, g := newTestSetWith(t, withNewProtocol(5), clu) // fake answers in the old script's style
+	gs.Refresh()
+	settle(t, gs)
+
+	for _, l := range clu.Lights {
+		hkSet(t, gs, findC(t, l.HkAccessory(), characteristic.TypeOn), true)
+		settle(t, gs)
+	}
+	if n := g.RequestCount(fakeSetPath); n != 2 {
+		t.Fatalf("%d set requests, want 2", n)
+	}
+	for i, l := range clu.Lights {
+		if g.Payload(tCLU, lightId(i+1))["State"] != false {
+			t.Errorf("%s: the old script ran an array request", lightId(i+1))
+		}
+		if v := findC(t, l.HkAccessory(), characteristic.TypeOn).Val; v != false {
+			t.Errorf("%s: HomeKit shows %v after the confirm read, want false", lightId(i+1), v)
+		}
+	}
+	out := logs.String()
+	if n := strings.Count(out, "old update-script.lua"); n != 1 {
+		t.Errorf("%d protocol hints logged, want 1:\n%s", n, out)
+	}
+	if !strings.Contains(out, "LegacyWriteScript") || !strings.Contains(out, "grenton/update-script.lua") {
+		t.Errorf("the hint does not name both remedies:\n%s", out)
+	}
+}

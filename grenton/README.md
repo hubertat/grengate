@@ -52,6 +52,9 @@ A thermostat read returns only what grengate uses: `TempCurrent`, `TempTarget`, 
 - A single object in gives a single acknowledgement object out.
 - An array in gives an array out: one acknowledgement per request item, same order, no holes. An array with one element is answered as an array.
 - An acknowledgement is `{Clu, Id, Kind}`, plus `Error` (a string) when that item failed. Unknown CLUs, unknown kinds and bad payloads give an item with `Error`; they are never skipped.
+- `Error` alone means nothing of the item ran: it failed before the GATE called the CLU (unknown CLU, missing or bad field, unknown kind or `Cmd`).
+  `Error` with `"Uncertain": true` means it failed after the GATE had called the CLU for it, for example an `execute()` that timed out after the CLU acted,
+  or a thermostat item whose setpoint was set before setting its state failed. The command may have run, partly or fully.
 - Every item runs in `pcall`, so one failing item does not stop the others.
 - There is no read-back: the response never carries device state. grengate confirms with a normal read.
 - An empty or non-JSON body is answered with a single object `{"Error":"..."}`.
@@ -78,6 +81,11 @@ Array write with a failing item (unknown CLU) in the middle:
  {"Clu":"CLU_012abcde","Id":"ROL0001","Kind":"Shutter"}]
 ```
 
+An item whose `execute()` raised (the text of `Error` is whatever the GATE reports):
+```json
+{"Clu":"CLU_012abcde","Id":"ROL0001","Kind":"Shutter","Error":"...","Uncertain":true}
+```
+
 Payloads per kind: `Light` takes `Light.State` (bool); `Shutter` takes `Cmd` of `MOVEUP`, `MOVEDOWN` or `STOP`;
 `Thermo` takes `Thermo.TempSetpoint`, `Thermo.State`, `Thermo.Mode` (numbers).
 
@@ -97,8 +105,10 @@ All fields are checked before the first one is set, so an item with a bad field 
 |---|---|
 | Acknowledgement without `Error` | Acknowledged |
 | Acknowledgement with `Error` | Failed, did not run (only that command) |
+| Acknowledgement with `Error` and `"Uncertain": true` | Outcome uncertain (only that command): it may have run. A shutter reconciles it with the confirm read instead of retrying. Binaries before stage 5 ignore `Uncertain` and treat the item as failed |
 | Object `{"Error": ...}` without `Clu`/`Id` | Every command of the request failed, did not run |
 | No acknowledgement for a command (array answered with fewer items, or `{}` from the old script) | Outcome uncertain |
+| Object without `Error` in answer to an array (the old script answers an array with `{}` and runs nothing) | Every command of the request uncertain, plus an `ERROR` log line (at most once a minute) pointing at the old script and at `LegacyWriteScript` |
 | Timeout, non-2xx status, body that is not JSON | Every command of the request uncertain |
 
 After every write, failed or not, grengate reads the device again (confirm read), so HomeKit ends up with the state the CLU has.
@@ -109,7 +119,8 @@ The scripts cannot run outside the GATE, so these points rest on the manual chec
 
 - `pcall` is available in the GATE's Lua and catches errors raised by `execute()`.
 - Whether `execute()` raises for an object id that does not exist on a known CLU. If it does not, such a command is acknowledged without effect, and only its confirm read (missing item) shows the problem.
-  Step 3 of the manual check shows which applies; an unknown CLU always gives a per-item `Error`.
+  If it does, the item gets `Error` with `Uncertain` (the GATE had called the CLU). Step 3 of the manual check shows which applies; an unknown CLU always gives a per-item `Error` without `Uncertain`.
+- Which errors `execute()` raises when a CLU does not answer, and whether the CLU may have acted by then. grengate treats every such error as uncertain.
 
 ## Rollout order
 

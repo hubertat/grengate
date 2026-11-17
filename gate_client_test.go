@@ -209,3 +209,26 @@ func TestRefresh_BadItemMakesOnlyItsDeviceInvalid(t *testing.T) {
 		t.Error("want only the light with the good item ready")
 	}
 }
+
+// An item that failed after the GATE called the CLU (Error with Uncertain) may have run:
+// uncertain, not "did not run".
+func TestGateClient_WritePerItemErrorAfterCluCallIsUncertain(t *testing.T) {
+	g := newFakeGate(t)
+	g.SetWriteStyle(fakeNewStyle)
+	g.SetLight(tCLU, tLID, false)
+	g.FailItemUncertain(tCLU, tLID, "CLU did not answer")
+	r := writeOnce(t, g, lightCmd(tLID, true), func(c *laneConfig) { c.asArray, c.maxItems = true, 5 })
+	if r.Outcome != OutcomeUncertain || r.Err == nil || !strings.Contains(r.Err.Error(), "CLU did not answer") {
+		t.Errorf("outcome %v (%v), want uncertain with the item's error", r.Outcome, r.Err)
+	}
+	for body, want := range map[string]Outcome{
+		`[{"Clu":"CLU_012abcde","Id":"DOU0001","Kind":"Light","Error":"x","Uncertain":true}]`:  OutcomeUncertain,
+		`[{"Clu":"CLU_012abcde","Id":"DOU0001","Kind":"Light","Error":"x","Uncertain":false}]`: OutcomeError,
+		`{"Clu":"CLU_012abcde","Id":"DOU0001","Kind":"Light","Error":"x","Uncertain":true}`:    OutcomeUncertain,
+	} {
+		g.RespondNext(fakeSetPath, body)
+		if r := writeOnce(t, g, lightCmd(tLID, true), nil); r.Outcome != want {
+			t.Errorf("%s: outcome %v, want %v", body, r.Outcome, want)
+		}
+	}
+}
