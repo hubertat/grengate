@@ -90,24 +90,28 @@ func (gs *GrentonSet) Refresh() refreshCounts {
 	start := time.Now()
 	now := gs.now()
 	var c refreshCounts
+	var queued []device
 	var objs []ReqObject
 	for _, d := range gs.registry.devices() {
 		if !gs.dueForPoll(d, now) {
 			c.Skipped++
 			continue
 		}
+		queued = append(queued, d)
 		objs = append(objs, d.readRequest())
 	}
 	c.Objects = len(objs)
 	chans := gs.reader.Submit(objs...)
 
-	for _, ch := range chans {
+	for i, ch := range chans {
 		r := <-ch
 		switch {
 		case r.Outcome == OutcomeFailed:
 			c.Failed++
+			retryNextRefresh(queued[i])
 		case r.Outcome == OutcomeMissing, r.Apply == ApplyInvalid: // logged per device by readCompleted
 			c.Missing++
+			retryNextRefresh(queued[i])
 		case r.Apply == ApplyDiscarded:
 			c.Discarded++
 		default:
@@ -128,6 +132,14 @@ func (gs *GrentonSet) Refresh() refreshCounts {
 		gs.Debugf("%s", summary)
 	}
 	return c
+}
+
+// retryNextRefresh makes a thermostat whose read failed, or came back missing or invalid,
+// due again in the next refresh instead of a full cadence later. Call with refreshMu held.
+func retryNextRefresh(d device) {
+	if th, ok := d.(*Thermo); ok {
+		th.lastPoll = time.Time{}
+	}
 }
 
 func describeDevice(d device) string {

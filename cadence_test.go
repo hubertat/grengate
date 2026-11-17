@@ -186,3 +186,50 @@ func TestRefresh_LegacyProtocolReadsThermostatsEveryCycle(t *testing.T) {
 		t.Errorf("thermostat read %d times, want 3", n)
 	}
 }
+
+// A scheduled thermostat read that fails or comes back without the thermostat is retried in
+// the next refresh, not a full ThermoCycleInSeconds later.
+func TestRefresh_FailedThermostatPollRetriedNextCycle(t *testing.T) {
+	cases := map[string]struct{ fail, recover func(g *fakeGate) }{
+		"request failed": {
+			func(g *fakeGate) { g.FailNext(fakeReadPath, 500, 1) },
+			func(*fakeGate) {},
+		},
+		"missing from the response": {
+			func(g *fakeGate) { g.Omit(tCLU, "THE0002") },
+			func(g *fakeGate) { g.Unomit(tCLU, "THE0002") },
+		},
+		"invalid result": {
+			func(g *fakeGate) { g.DropField(tCLU, "THE0002", "TempCurrent") },
+			func(g *fakeGate) { g.SetThermo(tCLU, "THE0002", 20, 21, 0, 0) },
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+			clu := cadenceClu()
+			clu.Therms = clu.Therms[:1]
+			gs, g := newTestSetWith(t, withCadence(clk, 60), clu)
+			gs.Refresh() // +0: read, ready
+			var polled []int
+			for k := 1; k <= 14; k++ {
+				clk.Advance(10 * time.Second)
+				switch k {
+				case 6:
+					c.fail(g)
+				case 7:
+					c.recover(g)
+				}
+				before := g.RequestCount(fakeReadPath)
+				gs.Refresh()
+				if readsPerDevice(g.Requests(fakeReadPath)[before:])["THE0002"] > 0 {
+					polled = append(polled, 10*k)
+				}
+			}
+			// +60 fails, +70 retries and succeeds, then every 60 s from there.
+			if want := []int{60, 70, 130}; fmt.Sprint(polled) != fmt.Sprint(want) {
+				t.Errorf("thermostat read at +%v s, want +%v s", polled, want)
+			}
+		})
+	}
+}
