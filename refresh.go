@@ -90,8 +90,25 @@ func (gs *GrentonSet) startup(ctx context.Context, autotest bool) {
 		gs.Logf("Testing all Grenton elements")
 		gs.TestAllGrentonGate()
 	}
+	clk := gs.clock
+	if clk == nil {
+		clk = realClock{}
+	}
+	cycle := gs.cycleDuration
+	if cycle <= 0 {
+		cycle = 10 * time.Second
+	}
+	origin := clk.Now()
 	c := gs.Refresh()
 	gs.Logf("startup refresh: %d of %d devices read (%d missing or invalid, %d failed) in %d ms",
 		c.Applied, c.Objects, c.Missing, c.Failed, c.Duration.Milliseconds())
-	gs.StartCycling()
+
+	s := &refreshScheduler{
+		origin:  origin,
+		cycle:   cycle,
+		clock:   clk,
+		refresh: func() { gs.Refresh() },
+		logf:    gs.Logf,
+	}
+	go s.run(ctx)
 }

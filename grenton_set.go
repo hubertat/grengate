@@ -34,7 +34,8 @@ type GrentonSet struct {
 	QueryLimit      int
 
 	cycleDuration time.Duration
-	cycling       *time.Ticker
+	// clock drives the refresh scheduler (nil: real time).
+	clock clock
 
 	registry *registry
 
@@ -287,18 +288,4 @@ func (gs *GrentonSet) TestAllGrentonGate() {
 		}
 	}
 	gs.Logf("GrentonSet TestAllGrentonGate: GATE test finished")
-}
-
-// StartCycling starts a goroutine which periodically refreshes state of all objects
-func (gs *GrentonSet) StartCycling() {
-	go func() {
-		gs.cycling = time.NewTicker(gs.cycleDuration)
-
-		for {
-			select {
-			case <-gs.cycling.C:
-				go gs.Refresh()
-			}
-		}
-	}()
 }
