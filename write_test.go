@@ -11,10 +11,11 @@ import (
 	"github.com/brutella/hap/characteristic"
 )
 
-// hkWrite performs a HomeKit write on c as a paired controller would and returns when
-// hap returns (the callback is still waiting for the GATE in this stage).
-func hkWrite(c *characteristic.C, v any) {
-	c.SetValueRequest(v, httptest.NewRequest("PUT", "/characteristics", nil))
+// hkWrite performs a HomeKit write on c as a paired controller would (hap's
+// PUT /characteristics handler calls SetValueRequest per item) and returns hap's status.
+func hkWrite(c *characteristic.C, v any) int {
+	_, status := c.SetValueRequest(v, httptest.NewRequest("PUT", "/characteristics", nil))
+	return status
 }
 
 // errorLines returns log lines that report an error.
@@ -33,13 +34,15 @@ func TestWrite_SuccessfulWriteLogsNoError(t *testing.T) {
 	for _, style := range []fakeWriteStyle{fakeOldStyle, fakeNewStyle} {
 		logs := captureLog(t)
 		clu := allKindsClu()
-		_, g := newTestSet(t, clu)
+		gs, g := newTestSet(t, clu)
 		g.SetWriteStyle(style)
-		g.SetShutter(clu.Id, "ROL0003", 20000, 0)
+		gs.Refresh()
+		settle(t, gs)
 
 		hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
 		hkWrite(clu.Therms[0].hk.Thermostat.TargetTemperature.C, 23.0)
 		clu.Shutters[0].sendCmd(shutterStop)
+		settle(t, gs)
 
 		if n := g.RequestCount(fakeSetPath); n != 3 {
 			t.Fatalf("style %d: set requests = %d, want 3", style, n)
@@ -56,11 +59,14 @@ func TestWrite_SuccessfulWriteLogsNoError(t *testing.T) {
 func TestWrite_LegacyProtocolOneSingleObjectPerCommand(t *testing.T) {
 	clu := allKindsClu()
 	clu.Lights = append(clu.Lights, &Light{CluObject: CluObject{Id: 5, Kind: "DOU", Name: "second"}})
-	_, g := newTestSet(t, clu)
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
 
 	hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
 	hkWrite(findC(t, clu.Lights[1].HkAccessory(), characteristic.TypeOn), true)
 	hkWrite(clu.Therms[0].hk.Thermostat.TargetTemperature.C, 22.5)
+	settle(t, gs)
 
 	reqs := g.Requests(fakeSetPath)
 	if len(reqs) != 3 {
@@ -87,59 +93,103 @@ func TestWrite_LegacyProtocolOneSingleObjectPerCommand(t *testing.T) {
 
 func TestWrite_ResponseIsNeverLoadedAsState(t *testing.T) {
 	clu := allKindsClu()
-	_, g := newTestSet(t, clu)
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
 	light, thermo := clu.Lights[0], clu.Therms[0]
 	on := findC(t, light.HkAccessory(), characteristic.TypeOn)
+	onSyncs := recordSyncs(on)
+	currentSyncs := recordSyncs(thermo.hk.Thermostat.CurrentTemperature.C)
 
-	// Old-script style answer with a read-back that contradicts the command.
+	// Old-script style answers with a read-back that contradicts the command; the confirm
+	// read is held so the state between acknowledgement and confirm read can be seen.
 	g.RespondNext(fakeSetPath, `{"Clu":"CLU_012abcde","Id":"DOU0001","Kind":"Light","Light":{"State":false}}`)
+	g.RespondNext(fakeSetPath, `{"Clu":"CLU_012abcde","Id":"THE0002","Kind":"Thermo","Thermo":{"TempCurrent":99,"TempTarget":99,"TempSetpoint":99,"State":1,"Mode":1}}`)
+	h := g.HoldNext(fakeReadPath)
 	hkWrite(on, true)
-	if on.Val != true {
-		t.Errorf("HomeKit On = %v after write, want true", on.Val)
-	}
+	hkWrite(thermo.hk.Thermostat.TargetTemperature.C, 21.5)
+	h.Wait(t)
+	eventually(t, 2*time.Second, gs.writer.idle, "both writes to finish")
+	syncHomeKit(t, gs)
+
 	light.mu.Lock()
 	state := light.State
 	light.mu.Unlock()
-	if !state {
-		t.Error("device state taken from the write response")
+	thermo.mu.Lock()
+	current := thermo.TempCurrent
+	thermo.mu.Unlock()
+	if !state || on.Val != true || onSyncs.contains(false) {
+		t.Error("light state taken from the write response")
 	}
-
-	g.RespondNext(fakeSetPath, `{"Clu":"CLU_012abcde","Id":"THE0002","Kind":"Thermo","Thermo":{"TempCurrent":99,"TempTarget":99}}`)
-	hkWrite(thermo.hk.Thermostat.TargetTemperature.C, 21.0)
-	if v := thermo.hk.Thermostat.CurrentTemperature.Value(); v == 99 {
+	if current == 99 || currentSyncs.contains(99.0) {
 		t.Error("current temperature taken from the write response")
+	}
+	h.Release()
+	settle(t, gs)
+}
+
+// A HomeKit write returns to hap without waiting for the GATE; the command is still sent
+// and acknowledged.
+func TestWrite_CallbackReturnsWithoutWaiting(t *testing.T) {
+	logs := captureLog(t)
+	clu := allKindsClu()
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
+	g.HangAll(fakeSetPath)
+
+	within(t, 50*time.Millisecond, "HomeKit writes while the GATE hangs", func() {
+		hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
+		hkWrite(clu.Therms[0].hk.Thermostat.TargetTemperature.C, 23.0)
+	})
+	g.WaitForRequests(t, fakeSetPath, 1)
+	g.ReleaseAll()
+	settle(t, gs)
+	if g.Payload(tCLU, "DOU0001")["State"] != true || g.Payload(tCLU, "THE0002")["TempSetpoint"] != 23.0 {
+		t.Error("commands did not reach the fake GATE")
+	}
+	if n := strings.Count(logs.String(), "acknowledged"); n != 2 {
+		t.Errorf("%d acknowledgements logged, want 2", n)
 	}
 }
 
-func TestWrite_CallbackWaitsForResult(t *testing.T) {
-	clu := allKindsClu()
-	_, g := newTestSet(t, clu)
-	h := g.HoldNext(fakeSetPath)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
-	}()
-	h.Wait(t)
-	select {
-	case <-done:
-		t.Fatal("callback returned before the GATE answered")
-	default:
+// A HomeKit request setting ten lights (hap runs the items of one PUT /characteristics in
+// a loop, one SetValueRequest per item) returns in well under one GATE round trip.
+func TestWrite_TenLightsReturnFastAgainstSlowGate(t *testing.T) {
+	clu := lightsClu(10)
+	gs, g := newTestSet(t, clu)
+	g.Delay(fakeSetPath, 300*time.Millisecond)
+
+	start := time.Now()
+	for _, l := range clu.Lights {
+		if status := hkWrite(findC(t, l.HkAccessory(), characteristic.TypeOn), true); status != 0 {
+			t.Fatalf("status %d", status)
+		}
 	}
-	h.Release()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("callback did not return after the GATE answered")
+	if d := time.Since(start); d >= 50*time.Millisecond {
+		t.Errorf("ten HomeKit writes took %v, want under 50 ms", d)
+	}
+
+	g.WaitForRequests(t, fakeSetPath, 1)
+	g.ClearRules() // the rest of the commands need not wait 300 ms each
+	settle(t, gs)
+	if n := g.RequestCount(fakeSetPath); n != 10 {
+		t.Errorf("set requests = %d, want 10", n)
+	}
+	for i := 1; i <= 10; i++ {
+		if g.Payload(tCLU, lightId(i))["State"] != true {
+			t.Errorf("%s not switched on", lightId(i))
+		}
 	}
 }
 
 func TestWrite_FailedWriteIsLogged(t *testing.T) {
 	logs := captureLog(t)
 	clu := allKindsClu()
-	_, g := newTestSet(t, clu)
+	gs, g := newTestSet(t, clu)
 	g.FailNext(fakeSetPath, 500, 1)
 	hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
+	settle(t, gs)
 	if !strings.Contains(logs.String(), "uncertain") {
 		t.Errorf("failed write not logged as uncertain:\n%s", logs.String())
 	}
@@ -151,6 +201,8 @@ func TestWrite_CommandEntersMailboxUnderDeviceLock(t *testing.T) {
 	clu := allKindsClu()
 	clu.Lights = append(clu.Lights, &Light{CluObject: CluObject{Id: 5, Kind: "DOU", Name: "blocker"}})
 	gs, g := newTestSet(t, clu)
+	gs.Refresh() // the thermostat refuses writes until it was read
+	settle(t, gs)
 
 	var mu sync.Mutex
 	merges := map[string]bool{} // device id -> device lock held while merging
@@ -219,15 +271,16 @@ func TestWrite_ConcurrentCallbacksLatestStateWins(t *testing.T) {
 		}
 		eventually(t, 2*time.Second, func() bool { return merges.Load() == int32(i+1) },
 			"both commands in the mailbox")
+		wg.Wait()
+		light.mu.Lock()
+		state := light.State // what HomeKit was told last
+		light.mu.Unlock()
 		h.Release()
 		waitResult(t, blocker)
-		wg.Wait()
+		settle(t, gs)
 
-		light.mu.Lock()
-		state := light.State
-		light.mu.Unlock()
 		if got := g.Payload(tCLU, "DOU0001")["State"]; got != state {
-			t.Fatalf("iteration %d: GATE state %v, device state %v", i, got, state)
+			t.Fatalf("iteration %d: GATE state %v, last state set by HomeKit %v", i, got, state)
 		}
 	}
 }

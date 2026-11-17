@@ -91,6 +91,7 @@ func TestLight_OutletRemoteUpdateSendsLightRequest(t *testing.T) {
 	on.SetValueRequest(true, httptest.NewRequest("PUT", "/characteristics", nil))
 
 	reqs := gate.WaitForRequests(t, fakeSetPath, 1)
+	settle(t, light.clu.set)
 	if len(reqs) != 1 {
 		t.Fatalf("set requests = %d, want 1", len(reqs))
 	}
@@ -108,8 +109,9 @@ func TestLight_OutletRemoteUpdateSendsLightRequest(t *testing.T) {
 	if got := gate.Payload("CLU_012abcde", "DOU1234")["State"]; got != true {
 		t.Errorf("fake GATE state = %v, want true", got)
 	}
-	if gate.RequestCount(fakeReadPath) != 0 {
-		t.Error("a write must not trigger a read")
+	// The only read is the confirm read of the light (concept 3.3, rule 5).
+	if rs := gate.Requests(fakeReadPath); len(rs) != 1 || len(rs[0].Items) != 1 || rs[0].Items[0]["Id"] != "DOU1234" {
+		t.Errorf("read requests after the write = %d, want one confirm read of the light", len(rs))
 	}
 }
 

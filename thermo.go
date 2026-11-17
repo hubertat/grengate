@@ -93,16 +93,21 @@ func (gt *Thermo) commandLocked() ReqObject {
 	return req
 }
 
+// SetTemperature is the HomeKit write of the target temperature (rule 1): optimistic state
+// and command snapshot under the device lock, no waiting for the GATE.
 func (gt *Thermo) SetTemperature(temp float64) {
 	gt.mu.Lock()
+	defer gt.mu.Unlock()
 	gt.TempSetpoint = temp
-	result := gt.submitCommandLocked(gt.commandLocked())
-	gt.mu.Unlock()
-
-	gt.waitCommand(result)
+	gt.TempTarget = temp // what HomeKit shows as the target until the confirm read
+	gt.submitCommandLocked(gt.commandLocked())
 }
+
+// SetState is the HomeKit write of the target heating/cooling state (rule 1): off, heat
+// (State 1, Mode 0) or auto (State 1, Mode 1); cool is not supported and switches off.
 func (gt *Thermo) SetState(state int) {
 	gt.mu.Lock()
+	defer gt.mu.Unlock()
 	switch state {
 	case 1:
 		gt.State = 1
@@ -113,8 +118,5 @@ func (gt *Thermo) SetState(state int) {
 	default:
 		gt.State = 0
 	}
-	result := gt.submitCommandLocked(gt.commandLocked())
-	gt.mu.Unlock()
-
-	gt.waitCommand(result)
+	gt.submitCommandLocked(gt.commandLocked())
 }

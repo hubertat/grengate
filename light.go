@@ -112,13 +112,15 @@ func (gl *Light) Sync() {
 	}
 }
 
+// Set is the HomeKit write of On (rule 1): the optimistic state and the command snapshot
+// are set and submitted under the device lock, and Set returns without waiting for the
+// GATE. A light needs no baseline, so the write goes through whether it is ready or not.
+// The write lane's completion hook handles the result.
 func (gl *Light) Set(state bool) {
 	gl.mu.Lock()
+	defer gl.mu.Unlock()
 	gl.State = state
 	req := gl.Req
 	req.Light = &LightPayload{State: ptr(state)}
-	result := gl.submitCommandLocked(req)
-	gl.mu.Unlock()
-
-	gl.waitCommand(result)
+	gl.submitCommandLocked(req)
 }

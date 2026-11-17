@@ -186,6 +186,7 @@ func TestInflux_PointsFromGrentonSetMatchSchema(t *testing.T) {
 	gs.Refresh()
 	syncHomeKit(t, gs) // hap characteristics are not synchronised: no HomeKit write during a sync
 	hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
+	settle(t, gs)
 	gs.Stop() // flushes the buffer
 
 	tagSets := map[string]string{

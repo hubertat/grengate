@@ -11,6 +11,8 @@ import (
 func TestDevices_ConcurrentReadsAndCommandsAreRaceFree(t *testing.T) {
 	clu := allKindsClu()
 	gs, g := newTestSet(t, clu)
+	gs.Refresh() // the thermostat refuses writes until it was read
+	settle(t, gs)
 	light, thermo, motion := clu.Lights[0], clu.Therms[0], clu.MotionSensors[0]
 
 	var wg sync.WaitGroup
@@ -46,11 +48,13 @@ func TestDevices_ConcurrentReadsAndCommandsAreRaceFree(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+	settle(t, gs)
 
-	if n := g.RequestCount(fakeReadPath); n < 10 {
-		t.Errorf("read requests = %d, want the 10 refreshes and the confirm reads", n)
+	if n := g.RequestCount(fakeReadPath); n < 11 {
+		t.Errorf("read requests = %d, want the 11 refreshes and the confirm reads", n)
 	}
-	if n := g.RequestCount(fakeSetPath); n != 15 {
-		t.Errorf("commands at the fake GATE = %d, want 15", n)
+	// Commands that were still waiting are replaced or merged by newer ones.
+	if n := g.RequestCount(fakeSetPath); n < 2 || n > 15 {
+		t.Errorf("commands at the fake GATE = %d, want between 2 and 15", n)
 	}
 }
