@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brutella/hap/characteristic"
 )
@@ -40,6 +41,21 @@ func num(v any) float64 {
 		return n
 	}
 	return -1
+}
+
+// hkSet is hkWrite once the HomeKit syncs queued so far are done: hap's characteristics
+// are not synchronised, so a test must not write one while the syncer sets it.
+func hkSet(t *testing.T, gs *GrentonSet, c *characteristic.C, v any) int {
+	t.Helper()
+	syncHomeKit(t, gs)
+	return hkWrite(c, v)
+}
+
+// queued returns the number of entries waiting in a lane's mailbox.
+func queued(l *lane) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.queue)
 }
 
 // newProtocolSet returns a ready set in the new protocol with a light and a thermostat
@@ -113,8 +129,8 @@ func TestProtocol_PartialThermostatCommandsMerge(t *testing.T) {
 	h := g.HoldNext(fakeSetPath)
 	hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
 	h.Wait(t)
-	hkWrite(th.TargetTemperature.C, 19.0)
-	hkWrite(th.TargetHeatingCoolingState.C, characteristic.TargetHeatingCoolingStateHeat)
+	hkSet(t, gs, th.TargetTemperature.C, 19.0)
+	hkSet(t, gs, th.TargetHeatingCoolingState.C, characteristic.TargetHeatingCoolingStateHeat)
 	h.Release()
 	settle(t, gs)
 
@@ -141,8 +157,8 @@ func TestProtocol_QueueSizeOneKeepsPartialCommands(t *testing.T) {
 	h := g.HoldNext(fakeSetPath)
 	hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
 	h.Wait(t)
-	hkWrite(th.TargetTemperature.C, 22.5)
-	hkWrite(clu.Shutters[0].hk.WindowCovering.TargetPosition.C, 0)
+	hkSet(t, gs, th.TargetTemperature.C, 22.5)
+	hkSet(t, gs, clu.Shutters[0].hk.WindowCovering.TargetPosition.C, 0)
 	h.Release()
 	settle(t, gs)
 
@@ -178,8 +194,8 @@ func TestProtocol_UnreadThermostat(t *testing.T) {
 			// Reads hang until both writes were made, so the thermostat is still unread
 			// for the second one (a refused write queues a read).
 			g.HangAll(fakeReadPath)
-			tempStatus := hkWrite(th.TargetTemperature.C, 24.0)
-			modeStatus := hkWrite(th.TargetHeatingCoolingState.C, characteristic.TargetHeatingCoolingStateHeat)
+			tempStatus := hkSet(t, gs, th.TargetTemperature.C, 24.0)
+			modeStatus := hkSet(t, gs, th.TargetHeatingCoolingState.C, characteristic.TargetHeatingCoolingStateHeat)
 			g.ReleaseAll()
 			settle(t, gs)
 			reqs := g.Requests(fakeSetPath)
@@ -305,6 +321,62 @@ func TestProtocol_PerItemErrorFailsOnlyThatCommand(t *testing.T) {
 			if strings.Contains(l, id) {
 				t.Errorf("error logged for %s: %s", id, l)
 			}
+		}
+	}
+}
+
+// The shutter in the new protocol: its commands share array requests with other commands;
+// a per-item error on the move fails only the move (retried once, then given up) while the
+// light in the same request is acknowledged; a move that runs ends with its automatic STOP.
+func TestProtocol_ShutterInArrayRequests(t *testing.T) {
+	checkGoroutines(t)
+	logs := captureLog(t)
+	clu := shutterClu()
+	clu.Lights = []*Light{{CluObject: CluObject{Id: 1, Kind: "DOU", Name: "lamp"}}}
+	gs, g := newTestSetWith(t, withNewProtocol(5), clu)
+	g.SetWriteStyle(fakeNewStyle)
+	gs.Refresh()
+	settle(t, gs)
+	sh, on := clu.Shutters[0], findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn)
+
+	g.FailItem(tCLU, tSID, "boom")
+	h := g.HoldNext(fakeSetPath)
+	hkWrite(on, true)
+	h.Wait(t)
+	hkTarget(t, sh, 40)
+	hkSet(t, gs, on, false)
+	eventually(t, 2*time.Second, func() bool { return queued(gs.writer) == 2 }, "the move to be submitted")
+	h.Release()
+	settle(t, gs)
+
+	reqs := g.Requests(fakeSetPath)
+	if len(reqs) < 2 {
+		t.Fatalf("%d set requests", len(reqs))
+	}
+	// The simulation goroutine submits the move, so it may enter the mailbox after the light.
+	if ids := itemIds(reqs[1]); !slices.Contains(ids, tSID) || !slices.Contains(ids, "DOU0001") || len(ids) != 2 {
+		t.Fatalf("second request %s, want the move and the light together", reqs[1].Body)
+	}
+	assertCmds(t, g, "MOVEDOWN", "MOVEDOWN")
+	assertShown(t, sh, shown{100, 100, hkStopped})
+	if g.Payload(tCLU, "DOU0001")["State"] != false || on.Val != false {
+		t.Error("the light command in the same request was not applied")
+	}
+	if !strings.Contains(logs.String(), "giving up on target 40") {
+		t.Errorf("give-up not logged:\n%s", logs.String())
+	}
+
+	g.ClearFailItem(tCLU, tSID)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 40, hkDecreasing})
+	tick(t, gs, 60)
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "MOVEDOWN", "MOVEDOWN", "STOP")
+	for _, r := range g.Requests(fakeSetPath) {
+		if !r.IsArray {
+			t.Errorf("request %s is not an array", r.Body)
 		}
 	}
 }
