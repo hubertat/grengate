@@ -33,6 +33,9 @@ type GrentonSet struct {
 	PerformAutotest bool
 	QueryLimit      int
 
+	// InfluxDB is the optional metrics reporting (off by default).
+	InfluxDB InfluxConfig
+
 	cycleDuration time.Duration
 	// clock drives the refresh scheduler (nil: real time).
 	clock clock
@@ -49,6 +52,9 @@ type GrentonSet struct {
 	// metrics receives request, command and refresh events (default: none recorded).
 	metrics Metrics
 	overlap overlapTracker
+	influx  *influxWriter
+
+	stopOnce sync.Once
 
 	// refreshMu lets only one refresh run at a time.
 	refreshMu sync.Mutex
@@ -119,6 +125,15 @@ func (gs *GrentonSet) startWorkers() {
 	}
 	if gs.metrics == nil {
 		gs.metrics = noMetrics{}
+		switch {
+		case gs.InfluxDB.Enabled && gs.InfluxDB.URL == "":
+			gs.Logf("InfluxDB: enabled but no URL configured, metrics are not reported")
+		case gs.InfluxDB.Enabled:
+			gs.influx = newInfluxWriter(gs.InfluxDB, gs.Logf)
+			gs.influx.start()
+			gs.metrics = influxMetrics{w: gs.influx}
+			gs.Logf("InfluxDB: reporting metrics to %s (org %q, bucket %q)", gs.InfluxDB.URL, gs.InfluxDB.Org, gs.InfluxDB.Bucket)
+		}
 	}
 	gs.hkSync = newHkSyncer()
 	gs.hkSync.start()
@@ -157,8 +172,13 @@ func (gs *GrentonSet) startWorkers() {
 	gs.writer.start()
 }
 
-// Stop stops the workers. Pending submissions are resolved as failed.
+// Stop stops the workers and sends the buffered metrics. Pending submissions are resolved
+// as failed. Safe to call more than once.
 func (gs *GrentonSet) Stop() {
+	gs.stopOnce.Do(gs.stop)
+}
+
+func (gs *GrentonSet) stop() {
 	if gs.reader != nil {
 		gs.reader.stop()
 	}
@@ -167,6 +187,9 @@ func (gs *GrentonSet) Stop() {
 	}
 	if gs.hkSync != nil {
 		gs.hkSync.close()
+	}
+	if gs.influx != nil {
+		gs.influx.close()
 	}
 }
 
