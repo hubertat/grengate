@@ -122,17 +122,17 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 
 **Work**:
 
-- [ ] Wire payload types separate from the device structs, with pointer fields so an absent field can be told from zero.
+- [x] Wire payload types separate from the device structs, with pointer fields so an absent field can be told from zero.
       `ReqObject` carries these instead of `*Light`, `*Thermo`, `*Shutter`, `*MotionSensor`. Validity per kind as in concept 3.5.
-- [ ] Per-device state: generation, pending or in-flight command, ready flag. The read lane's send hook records generations; the completion hooks apply rules 2, 4 and 5, including the confirm read.
-- [ ] Command snapshots built under the device lock. Thermostat merge in the write mailbox (field-wise); plain replace for lights and shutters.
+- [x] Per-device state: generation, pending or in-flight command, ready flag. The read lane's send hook records generations; the completion hooks apply rules 2, 4 and 5, including the confirm read.
+- [x] Command snapshots built under the device lock. Thermostat merge in the write mailbox (field-wise); plain replace for lights and shutters.
       The thermostat snapshot carries all three fields in this stage; partial commands arrive with the new protocol in stage 5.
-- [ ] Light and thermostat callbacks: apply rule 1, submit, return.
-- [ ] Readiness in HomeKit: `ValueRequestFunc` answers reads of a not-ready device with `JsonStatusServiceCommunicationFailure`;
+- [x] Light and thermostat callbacks: apply rule 1, submit, return.
+- [x] Readiness in HomeKit: `ValueRequestFunc` answers reads of a not-ready device with `JsonStatusServiceCommunicationFailure`;
       `SetValueRequestFunc` refuses a write whose baseline is unknown with the same status, logs it and queues a read.
-- [ ] Thermostat: sync `TargetHeatingCoolingState` from Grenton state and mode (off; heat for mode 0; auto for mode 1).
-- [ ] Input server: a motion sensor push is applied under rule 3; unknown device or bad payload returns a 4xx.
-- [ ] A test pinning hap's same-value behaviour (concept 3.5), so a library upgrade that changes it is noticed.
+- [x] Thermostat: sync `TargetHeatingCoolingState` from Grenton state and mode (off; heat for mode 0; auto for mode 1).
+- [x] Input server: a motion sensor push is applied under rule 3; unknown device or bad payload returns a 4xx.
+- [x] A test pinning hap's same-value behaviour (concept 3.5), so a library upgrade that changes it is noticed.
 
 **Success Criteria**:
 
@@ -154,7 +154,7 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 
 **Manual check before deploying**: one device with a deliberately wrong id shows as "No Response" in the Home app, the rest work.
 
-**Status**: Not Started
+**Status**: Complete except: the manual check before deploying (one device with a wrong id shows as "No Response" in the Home app) needs the real Home app
 
 ---
 

@@ -13,7 +13,7 @@ type refreshCounts struct {
 	Objects   int
 	Applied   int
 	Changed   int
-	Discarded int // dropped by the ordering rules (stage 3; always 0 for now)
+	Discarded int // valid, but dropped by the ordering rules (concept 3.3, rule 4)
 	Missing   int // not in the response, or invalid for the device
 	Failed    int // their request failed
 	Skipped   int // not due this cycle (stage 5; always 0 for now)

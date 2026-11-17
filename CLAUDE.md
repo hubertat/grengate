@@ -72,13 +72,15 @@ Configuration is JSON-based. See `config.json.example` for structure:
    - Each device references its parent CLU
 
 3. **Lanes** (`lane.go`, `gate_client.go`) - one per GATE endpoint (concept 3.1)
-   - Mailbox keyed by Clu+Id (merge policy per lane: reads merge, writes replace with a "superseded" result) and one worker sending one request at a time
+   - Mailbox keyed by Clu+Id (merge policy per lane: reads merge; writes replace with a "superseded" result, except thermostat commands, which merge field-wise and share the outcome: `mergeCommand`) and one worker sending one request at a time
    - `Submit` never blocks; each submission gets a one-slot result channel; results carry a completion stamp shared by both lanes
    - Read lane: up to `QueryLimit` devices per array request. Write lane: one single-object command per request (legacy protocol)
    - Hooks set by `GrentonSet`: `onSent` (request about to be sent) and `onComplete` (per entry, before delivery); neither may block
    - **Critical**: Grenton GATE cannot handle many rapid HTTP requests, so each lane sends strictly one request at a time
 
 3a. **Registry** (`registry.go`) - devices by Clu+Id (case-insensitive) behind the small `device` interface (`applyRead`, `Sync`, `readRequest`)
+
+3b. **Wire payloads** (`payload.go`) - `LightPayload`, `ThermoPayload`, `ShutterPayload`, `MotionPayload` with pointer fields (absent is not zero); `valid*` check a read item per kind (concept 3.5)
 
 4. **Device Types** - Each implements HomeKit accessories
    - **Light** (`light.go`): Binary on/off DOUT devices. `HkType` selects the HomeKit accessory: `Lightbulb` (default) or `Outlet`; the Grenton side (Kind `Light`) is identical for both
@@ -91,7 +93,9 @@ Configuration is JSON-based. See `config.json.example` for structure:
    - Provides `GetMixedId()` (e.g., "DOU0001") and `GetLongId()` (unique 64-bit)
    - Contains `Req` (ReqObject, the read request item)
    - `mu` guards device state (never held during HTTP or hap calls), `syncMu` serialises HomeKit pushes
-   - `sendCommand()` submits to the write lane and waits for the result (callbacks become non-blocking in stage 3)
+   - Ordering state under `mu` (concept 3.3): `gen` (generation), `cmdSeq`/`busy` (latest command, command pending or in flight), `ready` (a valid read was applied, concept 3.5)
+   - `submitCommandLocked()` (rule 1: bump generation, mark busy, number the command, submit) is called under `mu` in the same critical section that set the optimistic state
+   - `guardReads()` makes HomeKit reads of a not-ready device answer `JsonStatusServiceCommunicationFailure`; `writeGuard()` is a `SetValueRequestFunc` refusing a write while not ready (logs, queues a read)
 
 6. **InputServer** (`input_server.go`) - Optional HTTP server
    - Listens for push updates from Grenton (primarily for motion sensors)
@@ -103,32 +107,35 @@ Configuration is JSON-based. See `config.json.example` for structure:
 **Reading State:**
 1. `GrentonSet.Refresh()` (`refresh.go`) submits every device to the read lane at once and waits for an outcome per device
 2. The read lane POSTs arrays of up to `QueryLimit` items to `ReadPath`
-3. The completion hook (`readCompleted`) finds the device in the registry, `applyRead` validates and stores the item, and the HomeKit syncer (`hk_sync.go`) pushes it to HomeKit
+3. The send hook (`readSent`) records each device's generation in the entry; the completion hook (`readCompleted`) finds the device in the registry and `applyRead` validates the item and applies it only if the generation is unchanged and no command is pending (rule 4; otherwise `ApplyDiscarded`); the HomeKit syncer (`hk_sync.go`) pushes applied state to HomeKit
 4. Refresh counts applied/changed/discarded/missing-or-invalid/failed and reports a metrics event
 5. One refresh runs at startup before the HomeKit server (`startup()`); after `hap.NewServer`, `startCycling()` starts `refreshScheduler` (`scheduler.go`), which runs one refresh per cycle boundary, skipping boundaries that pass during a refresh
 
 **Writing State:**
-1. HomeKit accessory callback triggered (e.g., `Light.Set()`)
-2. Device updates local state and builds a command snapshot under its lock
-3. `sendCommand()` submits it to the write lane and waits for the result
-4. The write lane POSTs it as a single object to `SetLightPath`; the response is an acknowledgement only (`decodeWriteResponse`, both response shapes) and is never loaded as state
+1. hap calls the characteristic's `SetValueRequestFunc` (thermostat: `writeGuard` refuses while not ready), stores the value, then the `OnValueRemoteUpdate` callback (e.g., `Light.Set()`)
+2. Under the device lock the callback sets the optimistic state, builds a command snapshot (payload values, never a pointer to the device) and calls `submitCommandLocked()`; it returns without waiting (the shutter still waits until stage 4)
+3. The write lane POSTs it as a single object to `SetLightPath`; the response is an acknowledgement only (`decodeWriteResponse`, both response shapes) and is never loaded as state
+4. The write completion hook (`writeCompleted`) logs the outcome, bumps the generation (rule 2) and, if the command was the device's latest (`cmdSeq`), clears `busy` and queues a confirm read (rule 5), which restores the real state after a failed write
 
 **Push Updates (Motion Sensors):**
 1. Grenton GATE Lua script POSTs to InputServer `/update` endpoint
-2. InputServer finds the motion sensor in the registry
-3. Device `Set()` method updates state and syncs to HomeKit
+2. InputServer finds the motion sensor in the registry (404 if there is none, 400 for a bad payload)
+3. `MotionSensor.Set()` applies the state under rule 3 (bumps the generation, so older poll results are discarded) and queues a HomeKit sync
 
 ### HomeKit Integration
 
 - **Bridge Pattern**: One bridge accessory containing all device accessories
 - **Accessory IDs**: Generated via `GetLongId()` (combines CLU ID and device ID)
 - **Storage**: HAP framework stores pairing data in `hk/` directory (HkPath config)
-- **Callbacks**: HomeKit changes trigger device methods (OnValueRemoteUpdate)
-- **Sync Pattern**: Devices call `.SetValue()` on HomeKit characteristics to push updates
+- **Callbacks**: HomeKit changes trigger device methods (`OnValueRemoteUpdate`, after hap stored the value); refusals go through `SetValueRequestFunc`
+- **Readiness**: characteristics of a device without a valid read answer reads with an error status ("No Response")
+- **Sync Pattern**: `Sync()` calls `.SetValue()` on the characteristics; it runs on the HomeKit syncer goroutine (`hkSync.mark`), never under a device lock
+- **hap limit**: a write equal to hap's cached value is answered with success and never reaches grengate (pinned by `hap_pin_test.go`)
 
 ### Key Design Patterns
 
 1. **Lanes**: one request in flight per GATE endpoint, latest command wins per device
+1a. **Per-device ordering** (concept 3.3): generation + pending command decide whether a read result is applied; confirm read after every device's latest write
 2. **Periodic Refresh**: fixed cycle boundaries, no `time.Ticker`, one refresh at a time
 3. **Mixed IDs**: Devices use "KIND####" format (e.g., "DOU0001") as unique identifiers within CLUs
 4. **Metrics** (`metrics.go`, `influx.go`): `Metrics` interface (request, command, refresh events), no-op by default, InfluxDB v2 line protocol when configured
@@ -136,7 +143,7 @@ Configuration is JSON-based. See `config.json.example` for structure:
 
 ## Development Notes
 
-- **Tests**: `go test -race ./...`. `fakegate_test.go` is a fake GATE (API described at the top of the file); `helpers_test.go` has `newTestSet`/`newTestClu` (a `GrentonSet` wired to it without a config file), `captureLog`, `eventually`; `light_test.go` has `findC`
+- **Tests**: `go test -race ./...`. `fakegate_test.go` is a fake GATE (API described at the top of the file); `helpers_test.go` has `newTestSet`/`newTestClu` (a `GrentonSet` wired to it without a config file), `captureLog`, `eventually`, `settle` (both lanes idle and HomeKit synced); `light_test.go` has `findC`; `write_test.go` has `hkWrite`; `ordering_test.go` has `recordSyncs`, `hkWriteAsync`, `queuedIn`
 - **Logging**: Use `GrentonSet.Logf()` for normal logs, `Debugf()` for verbose (controlled by Verbose config)
 - **Error Handling**: Errors logged via `GrentonSet.Error()`, often with `pkg/errors.Wrap/Wrapf`
 - **Concurrency**: device state behind `CluObject.mu`; lane mailboxes behind their own mutex, never held during HTTP

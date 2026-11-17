@@ -84,7 +84,7 @@ const (
 	ApplyChanged                       // valid, applied, device state changed
 	ApplyUnchanged                     // valid, applied, device state unchanged
 	ApplyInvalid                       // item present but not valid for the device: not applied
-	ApplyDiscarded                     // valid but dropped by the ordering rules (stage 3)
+	ApplyDiscarded                     // valid but dropped by the ordering rules (concept 3.3, rule 4)
 )
 
 // laneResult is the outcome of one submission.
