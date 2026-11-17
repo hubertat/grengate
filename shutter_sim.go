@@ -369,7 +369,8 @@ func (s *shutterSim) handle(ev simEvent) {
 
 // handleTarget starts a new movement generation for a HomeKit target. From standstill, or
 // against the believed movement, the generation submits its command (MOVEUP, MOVEDOWN, or
-// STOP when the target is the position); a command still waiting in the write mailbox is
+// STOP when the target is the position; a target at an end stop always gets its move, since
+// the full travel there is what resets the error of the simulated position); a command still waiting in the write mailbox is
 // replaced by it. If the motor already moves towards the target, no command could change
 // that and no uncertain outcome leaves that in doubt, the movement simply becomes the new
 // generation's. Otherwise the new command's result decides, whatever an older uncertain
@@ -378,9 +379,9 @@ func (s *shutterSim) handleTarget(n uint64, target int) {
 	s.gen = generation{n: n, target: target}
 	cmd := cmdStop
 	switch {
-	case target > s.pos:
+	case target > s.pos || target == 100:
 		cmd = cmdUp
-	case target < s.pos:
+	case target < s.pos || target == 0:
 		cmd = cmdDown
 	}
 	c := &shutterCommand{cmd: cmd, gen: n}

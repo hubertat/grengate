@@ -751,17 +751,18 @@ func TestShutter_ItemErrorOlderGenerationDoesNothing(t *testing.T) {
 	checkGoroutines(t)
 	gs, g, sh, _ := readyShutter(t)
 	g.SetWriteStyle(fakeNewStyle)
+	moveTo(t, gs, sh, 50)
 	g.FailItem(tCLU, tSID, "boom")
 	h := g.HoldNext(fakeSetPath)
 	hkTarget(t, sh, 40)
 	h.Wait(t)
 	g.ClearFailItem(tCLU, tSID)
-	hkTarget(t, sh, 100) // the position: STOP
+	hkTarget(t, sh, 50) // the position: STOP
 	eventually(t, 2*time.Second, sh.sim.inboxHandled, "the simulation to handle the target")
 	h.Release()
 	settle(t, gs)
-	assertCmds(t, g, "MOVEDOWN", "STOP")
-	assertShown(t, sh, shown{100, 100, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "STOP")
+	assertShown(t, sh, shown{50, 50, hkStopped})
 }
 
 // MOVEUP in flight, STOP requested, MOVEUP acknowledged, STOP fails (per-item error, also on
@@ -1264,4 +1265,48 @@ func TestShutter_LateStopAckBreaksOlderMovement(t *testing.T) {
 		t.Error("a late acknowledgement claimed the wall switch's movement")
 	}
 	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "STOP")
+}
+
+// A target at an end stop sends the move even when the simulated position is already there:
+// the full travel to the end stop is what resets the simulation's error. Here HomeKit's
+// target differs from 100 (a move to 40 is in flight) when the user asks for 100 (or for 0
+// at 0).
+func TestShutter_EndStopTargetAtPositionSendsMove(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		end      int
+		prep     []string // commands that brought the shutter to end
+		away, to string   // the command towards 40, and back to end
+	}{
+		{"open at 100", 100, nil, "MOVEDOWN", "MOVEUP"},
+		{"closed at 0", 0, []string{"MOVEDOWN", "STOP"}, "MOVEUP", "MOVEDOWN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkGoroutines(t)
+			gs, g, sh, _ := readyShutter(t)
+			if tc.end == 0 {
+				hkTarget(t, sh, 0)
+				settle(t, gs)
+				tick(t, gs, 100)
+				settle(t, gs)
+				assertShown(t, sh, shown{0, 0, hkStopped})
+			}
+			h := g.HoldNext(fakeSetPath)
+			hkTarget(t, sh, 40)
+			h.Wait(t)
+			hkTarget(t, sh, tc.end)
+			eventually(t, 2*time.Second, sh.sim.inboxHandled, "the simulation to handle the target")
+			h.Release()
+			settle(t, gs)
+			want := append(append([]string(nil), tc.prep...), tc.away, tc.to)
+			assertCmds(t, g, want...)
+			tick(t, gs, 99)
+			settle(t, gs)
+			assertCmds(t, g, want...)
+			tick(t, gs, 1)
+			settle(t, gs)
+			assertShown(t, sh, shown{tc.end, tc.end, hkStopped})
+			assertCmds(t, g, append(want, "STOP")...)
+		})
+	}
 }
