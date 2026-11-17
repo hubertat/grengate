@@ -73,6 +73,45 @@ Grenton has no power sensing, so HomeKit "Outlet In Use" mirrors the on/off stat
 Changing `HkType` of an already paired device keeps its accessory id; if the Home app shows it
 incorrectly, remove the accessory and let it be re-added.
 
+#### polling and refresh
+
+All devices are read from the GATE every `CycleInSeconds` (default 10), at most `QueryLimit` devices (default 30) per read request.
+The first read happens at startup, before HomeKit is started. A refresh that takes longer than a cycle is not followed by an
+immediate second one: the next refresh starts at the next cycle boundary, and the skipped cycles are logged.
+
+`FreshInSeconds` is no longer used. It is still accepted, so older config files load unchanged.
+
+#### metrics (InfluxDB v2)
+
+Optional. Add an `InfluxDB` block to send metrics to an InfluxDB v2 bucket (line protocol over HTTP, token authentication):
+
+```json
+"InfluxDB": {
+	"Enabled": true,
+	"URL": "http://localhost:8086",
+	"Token": "your-token",
+	"Org": "your-org",
+	"Bucket": "grengate"
+}
+```
+
+Points (all fields are integers):
+
+| Measurement | Tags | Fields | One point per |
+|---|---|---|---|
+| `grengate_command` | `operation=flush`, `component=gate_broker` (+ `clu_id`, `object_id` for a one-object request) | `duration_ms`, `object_count`, `clu_count`, `request_bytes`, `success`, `queue_wait_ms`, `overlap` | write request |
+| `grengate_command` | `operation=command_endtoend`, `component=command`, `clu_id`, `object_id` | `duration_ms` (submit to result), `queue_wait_ms` (submit to sent), `http_ms` | command (superseded commands are not reported) |
+| `grengate_refresh` | `operation=flush`, `component=gate_broker` (+ `clu_id`, `object_id` for a one-object request) | same as the write request | read request |
+| `grengate_refresh` | `operation=refresh_cycle`, `component=grenton_set` | `duration_ms`, `object_count`, `changed_objects`, `skipped_objects`, `discarded_objects`, `missing_objects`, `failed_objects` | refresh |
+
+`overlap` is 1 when a request of the other endpoint (read or write) was in flight during this one.
+Points are buffered and sent every 10 s; if InfluxDB is unreachable they are dropped (and the drop is logged), grengate never waits for it.
+
+#### autotest
+
+`-do-autotest` (or `"PerformAutotest": true`) reads every configured device once at startup and logs each device
+for which the GATE returned no item, an item of another kind, or an item without its payload. Failing devices stay configured.
+
 ### grenton GATE
 
 #### http listener

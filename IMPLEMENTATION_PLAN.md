@@ -68,25 +68,25 @@ Behaviour towards the GATE stays as today: single-object writes, same scripts. H
 
 **Work**:
 
-- [ ] `lane.go`: mailbox keyed by device in arrival order, worker taking at most one request's worth, one-slot result channel per submission,
+- [x] `lane.go`: mailbox keyed by device in arrival order, worker taking at most one request's worth, one-slot result channel per submission,
       fan-out to every channel of a merged read entry, "superseded" result for a replaced write, completion stamp from one process-wide counter.
       Two hooks set by `GrentonSet`: one called when a request is sent, one when an entry completes. Both must return without blocking.
-- [ ] GATE client used by the lanes: POST, 10 s timeout, decoding of a read response (array) and of a write response in both shapes (object or array, concept 3.7).
+- [x] GATE client used by the lanes: POST, 10 s timeout, decoding of a read response (array) and of a write response in both shapes (object or array, concept 3.7).
       Results distinguish acknowledged, per-item error and uncertain outcome (concept 3.2).
-- [ ] `registry.go`: one device map keyed by `Clu` + `Id` (case-insensitive, as the input server matches today) and a small device interface.
+- [x] `registry.go`: one device map keyed by `Clu` + `Id` (case-insensitive, as the input server matches today) and a small device interface.
       It replaces `FindLight`, `FindThermo`, `FindShutter`, `FindMotionSensor` and the switch in `update()`.
-- [ ] `CluObject` gets a mutex guarding the device's fields; `LoadReqObject` and the setters take it. This is what makes `-race` meaningful from here on.
-- [ ] Write path on the write lane in the legacy protocol: one command per request, sent as a single object. The callbacks submit and wait for the result. A write response is never loaded as device state;
+- [x] `CluObject` gets a mutex guarding the device's fields; `LoadReqObject` and the setters take it. This is what makes `-race` meaningful from here on.
+- [x] Write path on the write lane in the legacy protocol: one command per request, sent as a single object. The callbacks submit and wait for the result. A write response is never loaded as device state;
       the dead `LoadReqObject(obj)` calls after `SendReq` in `thermo.go` go away with `SendReq`.
-- [ ] `Refresh` on the read lane: submit every device, wait for an outcome per device (applied, discarded, missing or invalid, failed), count them.
+- [x] `Refresh` on the read lane: submit every device, wait for an outcome per device (applied, discarded, missing or invalid, failed), count them.
       `main.go` runs one refresh before the HomeKit server starts.
-- [ ] Refresh scheduling without `time.Ticker`. A ticker keeps one tick that fired during a slow refresh and delivers it right after, which would start a second refresh at once.
+- [x] Refresh scheduling without `time.Ticker`. A ticker keeps one tick that fired during a slow refresh and delivers it right after, which would start a second refresh at once.
       Instead the cycle boundaries are fixed from the start time; after a refresh completes, the loop waits for the first boundary that is still in the future.
       Boundaries that passed during the refresh are skipped and counted in the log. The next-boundary calculation is a pure function, and the loop takes an injected clock.
-- [ ] Autotest on the read lane with validation of identity and payload, covering all device kinds, report-only (concept 3.9). Remove `TestGrentonGate` and `Clu.block`.
-- [ ] `metrics.go`: `Metrics` interface, no-op implementation, one debug log line per request. Overlap detection between the two lanes.
-- [ ] `influx.go`: InfluxDB v2 line protocol over plain HTTP with the schema of concept 3.8. Buffered, sent in the background, bounded buffer, never blocks a lane.
-- [ ] Delete `gate_broker.go`. Update `config.json.example` and `README.md` for `InfluxDB` and the unused `FreshInSeconds`.
+- [x] Autotest on the read lane with validation of identity and payload, covering all device kinds, report-only (concept 3.9). Remove `TestGrentonGate` and `Clu.block`.
+- [x] `metrics.go`: `Metrics` interface, no-op implementation, one debug log line per request. Overlap detection between the two lanes.
+- [x] `influx.go`: InfluxDB v2 line protocol over plain HTTP with the schema of concept 3.8. Buffered, sent in the background, bounded buffer, never blocks a lane.
+- [x] Delete `gate_broker.go`. Update `config.json.example` and `README.md` for `InfluxDB` and the unused `FreshInSeconds`.
 
 **Success Criteria**:
 
@@ -111,7 +111,7 @@ Behaviour towards the GATE stays as today: single-object writes, same scripts. H
 - Metrics: each event reported once; overlap flag set when the fake GATE holds a read open during a write.
 - Influx writer: line format, integer suffix, tag escaping, behaviour when the endpoint is down.
 
-**Status**: Not Started
+**Status**: Complete
 
 ---
 

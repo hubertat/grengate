@@ -10,8 +10,22 @@
 	"ReadPath": "read/",
 	"SetLightPath": "set/",
 
-	## data 'freshness' after how many seconds refresh all data
+	## every how many seconds all devices are read from the GATE (default 10)
+	"CycleInSeconds": 10,
+	## devices per read request (default 30)
+	"QueryLimit": 30,
+
+	## no longer used; still accepted so older config files load
 	"FreshInSeconds": 5,
+
+	## optional: metrics to InfluxDB v2 (off when the block is missing or Enabled is false)
+	"InfluxDB": {
+		"Enabled": false,
+		"URL": "http://localhost:8086",
+		"Token": "your-token",
+		"Org": "your-org",
+		"Bucket": "grengate"
+	},
 
 	## define clus and devices here
 	"Clus": [
