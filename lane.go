@@ -113,12 +113,15 @@ type mergeFunc func(pending, incoming ReqObject) (merged ReqObject, supersede bo
 func mergeKeepPending(pending, _ ReqObject) (ReqObject, bool) { return pending, false }
 
 // mergeReplace is the write lane policy for lights and shutters: latest command wins.
-func mergeReplace(_, incoming ReqObject) (ReqObject, bool) { return incoming, true }
+func mergeReplace(pending, incoming ReqObject) (ReqObject, bool) {
+	incoming.owners = mergeOwners(pending, incoming)
+	return incoming, true
+}
 
 // mergeCommand is the write lane policy (concept 3.2): a thermostat command is merged
 // field-wise into the pending one (the fields of the newer command win, the others stay)
 // and the older submitters share the merged command's outcome; every other command
-// replaces the pending one. The merged command keeps the newer command's sequence number.
+// replaces the pending one. The merged command finishes for the owners of both.
 func mergeCommand(pending, incoming ReqObject) (ReqObject, bool) {
 	if pending.Thermo == nil || incoming.Thermo == nil {
 		return mergeReplace(pending, incoming)
@@ -136,6 +139,7 @@ func mergeCommand(pending, incoming ReqObject) (ReqObject, bool) {
 	}
 	merged := incoming
 	merged.Thermo = &t
+	merged.owners = mergeOwners(pending, incoming)
 	return merged, false
 }
 
@@ -271,14 +275,18 @@ func (l *lane) stop() {
 	l.queue, l.index = nil, map[string]*laneEntry{}
 	l.mu.Unlock()
 	for _, e := range rest {
-		l.resolveStopped(e.subs)
+		l.resolveStopped(e, e.subs)
 	}
 }
 
 // resolveStopped gives up the submissions of one entry (one stamp for all of them) after
-// the lane stopped: never sent, so a read failed and a command did not run.
-func (l *lane) resolveStopped(subs []*laneSub) {
+// the lane stopped: never sent, so a read failed and a command did not run. The completion
+// hook sees an entry that was in the mailbox (e non-nil) as for any other outcome.
+func (l *lane) resolveStopped(e *laneEntry, subs []*laneSub) {
 	r := laneResult{Outcome: l.notSentOutcome(), Err: errLaneStopped, Stamp: l.cfg.stamps.Add(1)}
+	if e != nil && l.cfg.onComplete != nil {
+		l.cfg.onComplete(e, &r)
+	}
 	for _, s := range subs {
 		s.deliver(r)
 	}
@@ -309,7 +317,7 @@ func (l *lane) Submit(objs ...ReqObject) []<-chan laneResult {
 	if l.stopped {
 		l.mu.Unlock()
 		for _, s := range subs { // each submission is an entry of its own
-			l.resolveStopped([]*laneSub{s})
+			l.resolveStopped(nil, []*laneSub{s})
 		}
 		return chans
 	}

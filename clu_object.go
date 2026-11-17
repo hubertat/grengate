@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -27,9 +28,30 @@ type ReqObject struct {
 	Shutter      *ShutterPayload `json:",omitempty"`
 	MotionSensor *MotionPayload  `json:",omitempty"`
 
-	// seq is the device's command sequence number (commands only, never sent): the write
-	// completion hook compares it with the device's latest command (concept 3.3, rule 2).
+	// owners are the devices whose commands this command carries, each with that command's
+	// sequence number (commands only, never sent). Normally one: the submitting device.
+	// The write completion hook finishes the command for each of them (concept 3.3, rule 2).
+	owners []cmdOwner
+}
+
+// cmdOwner is a device that submitted a command and the command's sequence number.
+type cmdOwner struct {
+	co  *CluObject
 	seq uint64
+}
+
+// mergeOwners returns the owners of a command that replaced or merged into a pending one:
+// the incoming command's owners, plus the pending command's owners of other devices (their
+// command is folded in or replaced, but must still finish for them). A device's own older
+// command needs no finishing: its newer one is now the latest.
+func mergeOwners(pending, incoming ReqObject) []cmdOwner {
+	out := append([]cmdOwner(nil), incoming.owners...)
+	for _, p := range pending.owners {
+		if !slices.ContainsFunc(out, func(o cmdOwner) bool { return o.co == p.co }) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (ro ReqObject) Equal(to ReqObject) bool {
@@ -97,7 +119,7 @@ func (co *CluObject) submitCommandLocked(cmd ReqObject) <-chan laneResult {
 	co.gen++
 	co.cmdSeq++
 	co.busy = true
-	cmd.seq = co.cmdSeq
+	cmd.owners = []cmdOwner{{co: co, seq: co.cmdSeq}}
 	return co.clu.set.writer.Submit(cmd)[0]
 }
 

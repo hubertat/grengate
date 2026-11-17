@@ -94,7 +94,7 @@ Configuration is JSON-based. See `config.json.example` for structure:
    - Contains `Req` (ReqObject, the read request item)
    - `mu` guards device state (never held during HTTP or hap calls), `syncMu` serialises HomeKit pushes
    - Ordering state under `mu` (concept 3.3): `gen` (generation), `cmdSeq`/`busy` (latest command, command pending or in flight), `ready` (a valid read was applied, concept 3.5)
-   - `submitCommandLocked()` (rule 1: bump generation, mark busy, number the command, submit) is called under `mu` in the same critical section that set the optimistic state
+   - `submitCommandLocked()` (rule 1: bump generation, mark busy, number the command and record the device as its owner, submit) is called under `mu` in the same critical section that set the optimistic state
    - `guardReads()` makes HomeKit reads of a not-ready device answer `JsonStatusServiceCommunicationFailure`; `writeGuard()` is a `SetValueRequestFunc` refusing a write while not ready (logs, queues a read)
 
 6. **InputServer** (`input_server.go`) - Optional HTTP server
@@ -115,7 +115,7 @@ Configuration is JSON-based. See `config.json.example` for structure:
 1. hap calls the characteristic's `SetValueRequestFunc` (thermostat: `writeGuard` refuses while not ready), stores the value, then the `OnValueRemoteUpdate` callback (e.g., `Light.Set()`)
 2. Under the device lock the callback sets the optimistic state, builds a command snapshot (payload values, never a pointer to the device) and calls `submitCommandLocked()`; it returns without waiting (the shutter still waits until stage 4)
 3. The write lane POSTs it as a single object to `SetLightPath`; the response is an acknowledgement only (`decodeWriteResponse`, both response shapes) and is never loaded as state
-4. The write completion hook (`writeCompleted`) logs the outcome, bumps the generation (rule 2) and, if the command was the device's latest (`cmdSeq`), clears `busy` and queues a confirm read (rule 5), which restores the real state after a failed write
+4. The write completion hook (`writeCompleted`) logs the outcome, finishes the command for each device that submitted it (`ReqObject.owners`, kept through mailbox merges): bumps the generation (rule 2) and, if it was the device's latest command (`cmdSeq`), clears `busy` and queues a confirm read (rule 5), which restores the real state after a failed write
 
 **Push Updates (Motion Sensors):**
 1. Grenton GATE Lua script POSTs to InputServer `/update` endpoint

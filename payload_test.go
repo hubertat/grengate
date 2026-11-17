@@ -71,7 +71,7 @@ func TestPayload_ValidityPerKind(t *testing.T) {
 
 // Commands carry only the fields set, and a false or zero value is still sent.
 func TestPayload_CommandEncoding(t *testing.T) {
-	light := ReqObject{Clu: tCLU, Id: "DOU0001", Kind: "Light", Cmd: "SET", Light: &LightPayload{State: ptr(false)}, seq: 7}
+	light := ReqObject{Clu: tCLU, Id: "DOU0001", Kind: "Light", Cmd: "SET", Light: &LightPayload{State: ptr(false)}, owners: []cmdOwner{{&CluObject{}, 7}}}
 	b, _ := json.Marshal(light)
 	if got, want := string(b), `{"Clu":"CLU_012abcde","Id":"DOU0001","Kind":"Light","Cmd":"SET","Light":{"State":false}}`; got != want {
 		t.Errorf("light command = %s, want %s", got, want)

@@ -245,7 +245,8 @@ func (gs *GrentonSet) readCompleted(e *laneEntry, r *laneResult) {
 }
 
 // writeCompleted is the write lane's completion hook: it logs the outcome of each command
-// and records that the command finished (rule 2). If it was the device's latest command, a
+// and records that the command finished (rule 2) for each device that submitted it. If it
+// was the device's latest command, a
 // confirm read of the device is queued (rule 5): whether the command ran or not, the read
 // brings the device and HomeKit to the state the GATE has. Nobody needs to wait for the
 // result. A write response is an acknowledgement only and is never loaded as device state.
@@ -265,12 +266,13 @@ func (gs *GrentonSet) writeCompleted(e *laneEntry, r *laneResult) {
 		gs.Error(fmt.Errorf("write %s|%s (%s): outcome uncertain after %d ms: %v", obj.Clu, obj.Id, what, ms, r.Err))
 	}
 
-	d, ok := gs.registry.find(obj.Clu, obj.Id)
-	if !ok {
-		return
-	}
-	if d.base().commandFinished(obj.seq) {
-		gs.reader.Submit(d.readRequest())
+	// The devices that submitted it, not a registry lookup: a duplicated configuration
+	// entry submits under the same Clu + Id. Commands submitted to the lane directly have
+	// no owner.
+	for _, o := range obj.owners {
+		if o.co.commandFinished(o.seq) {
+			gs.reader.Submit(o.co.readRequest())
+		}
 	}
 }
 

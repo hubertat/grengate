@@ -284,3 +284,60 @@ func TestWrite_ConcurrentCallbacksLatestStateWins(t *testing.T) {
 		}
 	}
 }
+
+// A command replaced in the mailbox by a command of another device with the same Clu and Id
+// (a duplicated configuration entry) still finishes for its own device: neither device is
+// left with a pending command, so their reads are applied again.
+func TestWrite_CommandReplacedByDuplicateDeviceFinishesForBoth(t *testing.T) {
+	clu := lightsClu(2)
+	clu.Lights = append(clu.Lights, &Light{CluObject: CluObject{Id: 1, Kind: "DOU", Name: "dup"}})
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
+	first, dup := clu.Lights[0], clu.Lights[2]
+
+	h := g.HoldNext(fakeSetPath)
+	blocker := gs.writer.Submit(lightCmd("DOU0002", true))[0]
+	h.Wait(t)
+	first.Set(true)
+	first.Set(false)
+	dup.Set(true) // replaces first's command in the mailbox
+	h.Release()
+	waitResult(t, blocker)
+	settle(t, gs)
+
+	if n := g.RequestCount(fakeSetPath); n != 2 {
+		t.Errorf("set requests = %d, want 2 (blocker, one command for DOU0001)", n)
+	}
+	g.SetLight(tCLU, "DOU0001", false)
+	if c := gs.Refresh(); c.Discarded != 0 || c.Applied != 2 {
+		t.Errorf("refresh = %+v, want both registered lights applied", c)
+	}
+	for _, l := range []*Light{first, dup} {
+		l.mu.Lock()
+		busy := l.busy
+		l.mu.Unlock()
+		if busy {
+			t.Errorf("%q still has a pending command", l.Name)
+		}
+	}
+}
+
+// Commands still waiting when the write lane stops are finished for their devices.
+func TestWrite_StopFinishesPendingCommands(t *testing.T) {
+	clu := lightsClu(2)
+	gs, g := newTestSet(t, clu)
+	g.HangAll(fakeSetPath)
+	clu.Lights[0].Set(true) // in flight
+	g.WaitForRequests(t, fakeSetPath, 1)
+	clu.Lights[1].Set(true) // waiting in the mailbox
+	gs.Stop()
+	for _, l := range clu.Lights {
+		l.mu.Lock()
+		busy := l.busy
+		l.mu.Unlock()
+		if busy {
+			t.Errorf("%q still has a pending command after Stop", l.Name)
+		}
+	}
+}

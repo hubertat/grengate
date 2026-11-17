@@ -161,18 +161,19 @@ func TestMetrics_Overlap(t *testing.T) {
 	if len(w) != 1 || !w[0].Overlap {
 		t.Errorf("write during a held read: %+v, want overlap", w)
 	}
-	if len(r) < 1 || !r[0].Overlap {
+	if len(r) != 1 || !r[0].Overlap {
 		t.Errorf("held read with a write during it: %+v, want overlap", r)
 	}
-	settle(t, gs) // the write's confirm read runs after the held read, alone
+	settle(t, gs)
 
-	// Alone: no overlap (the write, its confirm read and a refresh, one after another).
+	// Alone: no overlap (a write and a refresh, one after another; commands submitted to the
+	// lane directly have no device, so no confirm read).
 	waitResult(t, gs.writer.Submit(lightCmd("DOU0002", true))[0])
 	settle(t, gs)
 	gs.Refresh()
 	w, r = m.lane(writeLane), m.lane(readLane)
-	if len(w) != 2 || len(r) != 4 {
-		t.Fatalf("events: %d writes, %d reads; want 2 writes and 4 reads (refresh, confirm read, confirm read, refresh)", len(w), len(r))
+	if len(w) != 2 || len(r) != 2 {
+		t.Fatalf("events: %d writes, %d reads; want 2 writes and 2 reads", len(w), len(r))
 	}
 	for _, e := range append(w[1:], r[1:]...) {
 		if e.Overlap {

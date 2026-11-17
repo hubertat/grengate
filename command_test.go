@@ -8,14 +8,15 @@ import (
 	"github.com/brutella/hap/characteristic"
 )
 
-func thermoCmd(setpoint *float64, state, mode *int, seq uint64) ReqObject {
+func thermoCmd(setpoint *float64, state, mode *int, owners ...cmdOwner) ReqObject {
 	return ReqObject{Clu: tCLU, Id: "THE0002", Kind: "Thermo", Cmd: "SET",
-		Thermo: &ThermoPayload{TempSetpoint: setpoint, State: state, Mode: mode}, seq: seq}
+		Thermo: &ThermoPayload{TempSetpoint: setpoint, State: state, Mode: mode}, owners: owners}
 }
 
 func TestMergeCommand_ThermostatFieldWise(t *testing.T) {
-	setpoint := thermoCmd(ptr(23.0), nil, nil, 1)
-	mode := thermoCmd(nil, ptr(1), ptr(1), 2)
+	dev, other := &CluObject{}, &CluObject{}
+	setpoint := thermoCmd(ptr(23.0), nil, nil, cmdOwner{dev, 1})
+	mode := thermoCmd(nil, ptr(1), ptr(1), cmdOwner{dev, 2})
 
 	merged, supersede := mergeCommand(setpoint, mode)
 	if supersede {
@@ -25,17 +26,21 @@ func TestMergeCommand_ThermostatFieldWise(t *testing.T) {
 	if th.TempSetpoint == nil || *th.TempSetpoint != 23 || th.State == nil || *th.State != 1 || th.Mode == nil || *th.Mode != 1 {
 		t.Errorf("merged = %+v, want setpoint 23, state 1, mode 1", th)
 	}
-	if merged.seq != 2 {
-		t.Errorf("merged seq = %d, want the newer command's 2", merged.seq)
+	if len(merged.owners) != 1 || merged.owners[0] != (cmdOwner{dev, 2}) {
+		t.Errorf("merged owners = %v, want the device with the newer command's seq 2", merged.owners)
 	}
 	if setpoint.Thermo.State != nil {
 		t.Error("the pending command was modified in place")
 	}
 
 	// The newer command's fields win.
-	merged, _ = mergeCommand(merged, thermoCmd(ptr(19.5), nil, nil, 3))
+	merged, _ = mergeCommand(merged, thermoCmd(ptr(19.5), nil, nil, cmdOwner{other, 1}))
 	if *merged.Thermo.TempSetpoint != 19.5 || *merged.Thermo.State != 1 {
 		t.Errorf("second merge = %+v", merged.Thermo)
+	}
+	// Another device's command (a duplicated configuration entry) keeps both owners.
+	if len(merged.owners) != 2 || merged.owners[0] != (cmdOwner{other, 1}) || merged.owners[1] != (cmdOwner{dev, 2}) {
+		t.Errorf("owners after a merge with another device = %v, want both", merged.owners)
 	}
 
 	// Lights and shutters: plain replace.
@@ -54,8 +59,8 @@ func TestMergeCommand_ThermostatSubmittersShareOutcome(t *testing.T) {
 	h := g.HoldNext(fakeSetPath)
 	blocker := l.Submit(lightCmd("DOU0001", true))[0]
 	h.Wait(t)
-	first := l.Submit(thermoCmd(ptr(23.0), nil, nil, 1))[0]
-	second := l.Submit(thermoCmd(nil, ptr(1), ptr(1), 2))[0]
+	first := l.Submit(thermoCmd(ptr(23.0), nil, nil))[0]
+	second := l.Submit(thermoCmd(nil, ptr(1), ptr(1)))[0]
 	h.Release()
 	waitResult(t, blocker)
 	r1, r2 := waitResult(t, first), waitResult(t, second)
@@ -171,8 +176,8 @@ func TestWriteLane_MergesPartialThermostatCommands(t *testing.T) {
 	h := g.HoldNext(fakeSetPath)
 	blocker := gs.writer.Submit(lightCmd("DOU0001", true))[0]
 	h.Wait(t)
-	first := gs.writer.Submit(thermoCmd(ptr(23.0), nil, nil, 0))[0]
-	second := gs.writer.Submit(thermoCmd(nil, ptr(1), ptr(1), 0))[0]
+	first := gs.writer.Submit(thermoCmd(ptr(23.0), nil, nil))[0]
+	second := gs.writer.Submit(thermoCmd(nil, ptr(1), ptr(1)))[0]
 	h.Release()
 	waitResult(t, blocker)
 	if r1, r2 := waitResult(t, first), waitResult(t, second); r1.Outcome != OutcomeOK || r2.Outcome != OutcomeOK {
