@@ -15,6 +15,13 @@ import (
 type fakeTimers struct {
 	mu      sync.Mutex
 	pending []*fakeTimer
+	stall   *stall // see stallNext
+}
+
+type stall struct {
+	stalled chan struct{} // closed when the caller is stalled
+	release chan struct{}
+	once    sync.Once
 }
 
 type fakeTimer struct {
@@ -28,7 +35,13 @@ func (c *fakeTimers) AfterFunc(d time.Duration, f func()) func() bool {
 	tm := &fakeTimer{d: d, f: f}
 	c.mu.Lock()
 	c.pending = append(c.pending, tm)
+	st := c.stall
+	c.stall = nil
 	c.mu.Unlock()
+	if st != nil {
+		close(st.stalled)
+		<-st.release
+	}
 	return func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -40,6 +53,19 @@ func (c *fakeTimers) AfterFunc(d time.Duration, f func()) func() bool {
 		}
 		return false
 	}
+}
+
+// stallNext makes the next AfterFunc call (a simulation starting its clock, in the middle
+// of handling an event) block until the returned release function is called; stalled is
+// closed once it blocks. Release is also called at test end.
+func (c *fakeTimers) stallNext(t testing.TB) (stalled <-chan struct{}, release func()) {
+	st := &stall{stalled: make(chan struct{}), release: make(chan struct{})}
+	c.mu.Lock()
+	c.stall = st
+	c.mu.Unlock()
+	release = func() { st.once.Do(func() { close(st.release) }) }
+	t.Cleanup(release)
+	return st.stalled, release
 }
 
 // running reports whether a timer is pending: the shutter clock runs.
@@ -226,21 +252,35 @@ func TestShutter_StartupShowsObservedMotorState(t *testing.T) {
 	}
 }
 
-// Posting to a simulation never waits for it: reads complete while the goroutine does not
-// run at all.
+// Posting to a simulation never waits for it: polls and confirm reads complete while the
+// running simulation is stuck in the middle of handling an event (here: starting its clock
+// after the acknowledgement of a move). Once it goes on, it takes what was posted meanwhile.
 func TestShutter_ReadWorkerDoesNotWaitForSimulation(t *testing.T) {
 	checkGoroutines(t)
-	clu := shutterClu()
-	gs, g := newTestSet(t, clu)
-	clu.Shutters[0].sim.stop()
-	within(t, 2*time.Second, "refreshes with the simulation stopped", func() {
+	gs, g, sh, clk := readyShutter(t)
+	stalled, release := clk.stallNext(t)
+	hkTarget(t, sh, 40)
+	select {
+	case <-stalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the simulation did not start its clock")
+	}
+	within(t, 2*time.Second, "polls while the simulation is stuck", func() {
 		for i := 0; i < 3; i++ {
-			g.SetShutter(tCLU, tSID, 20000, i%3)
-			if c := gs.Refresh(); c.Applied != 1 {
-				t.Errorf("refresh %d = %+v, want the shutter applied", i, c)
+			if c := gs.Refresh(); c.Applied != 2 {
+				t.Errorf("refresh %d = %+v, want both devices applied", i, c)
 			}
 		}
 	})
+	if sh.sim.inboxHandled() {
+		t.Error("the simulation handled events while stuck")
+	}
+	g.SetShutter(tCLU, tSID, 20000, 0) // a wall switch stops it
+	gs.Refresh()
+	release()
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 100, hkStopped})
+	assertCmds(t, g, "MOVEDOWN")
 }
 
 // The goroutine ends with GrentonSet.Stop; a barrier asked for afterwards is released at once.
@@ -1307,6 +1347,43 @@ func TestShutter_EndStopTargetAtPositionSendsMove(t *testing.T) {
 			settle(t, gs)
 			assertShown(t, sh, shown{tc.end, tc.end, hkStopped})
 			assertCmds(t, g, append(want, "STOP")...)
+		})
+	}
+}
+
+// Reconciliation table, row "any, the read fails as well", for a STOP: the STOP did not run
+// and its confirm read fails; it stays uncertain (no retry, the motor still believed moving)
+// until the next poll shows the motor still moving: then the STOP is retried.
+func TestShutter_UncertainStopReadFails(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		spoil func(g *fakeGate)
+		after func(g *fakeGate)
+	}{
+		{"read request fails", func(g *fakeGate) { g.FailNext(fakeReadPath, 500, 1) }, func(*fakeGate) {}},
+		{"shutter missing from the read", func(g *fakeGate) { g.Omit(tCLU, tSID) }, func(g *fakeGate) { g.Unomit(tCLU, tSID) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkGoroutines(t)
+			gs, g, sh, clk := readyShutter(t)
+			hkTarget(t, sh, 40)
+			settle(t, gs)
+			tick(t, gs, 59)
+			tc.spoil(g)
+			g.FailNext(fakeSetPath, 500, 1)
+			tick(t, gs, 1)
+			settle(t, gs)
+			assertShown(t, sh, shown{40, 40, hkDecreasing})
+			if clk.running() {
+				t.Error("clock running at the target")
+			}
+			assertCmds(t, g, "MOVEDOWN", "STOP")
+
+			tc.after(g)
+			gs.Refresh()
+			settle(t, gs)
+			assertShown(t, sh, shown{40, 40, hkStopped})
+			assertCmds(t, g, "MOVEDOWN", "STOP", "STOP")
 		})
 	}
 }
