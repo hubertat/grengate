@@ -124,7 +124,7 @@ func (gb *GateBroker) Flush() {
 	req, err := http.NewRequest("POST", gb.PostPath, bytes.NewBuffer(jsonQ))
 	if err != nil {
 		gb.flushErrors(err)
-		gb.u.Logf("New POST reques failed: ", err)
+		gb.u.Logf("New POST request failed: %v", err)
 		return
 	}
 
@@ -143,7 +143,7 @@ func (gb *GateBroker) Flush() {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
 		gb.flushErrors(fmt.Errorf("GateBroker received non-success http response from grenton host: %s", resp.Status))
-		gb.u.Logf("GateBroker received non-success http response from grenton host: ", resp.Status)
+		gb.u.Logf("GateBroker received non-success http response from grenton host: %s", resp.Status)
 		return
 	}
 
@@ -156,7 +156,7 @@ func (gb *GateBroker) Flush() {
 	err = json.Unmarshal(bodyBytes, &data)
 	if err != nil {
 		gb.flushErrors(err)
-		gb.u.Logf("Unmarshal data error: ", err)
+		gb.u.Logf("Unmarshal data error: %v", err)
 		return
 	}
 	gb.u.Logf("GateBroker Flush finished, will update.")

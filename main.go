@@ -34,7 +34,7 @@ func main() {
 
 	// Show version and exit if requested
 	if *showVersion {
-		fmt.Printf("blesrv %s\n", Version)
+		fmt.Printf("grengate %s\n", Version)
 		fmt.Printf("Git Commit: %s\n", GitCommit)
 		fmt.Printf("Build Date: %s\n", BuildDate)
 		return
@@ -92,7 +92,7 @@ func main() {
 
 	server.Pin = gren.HkPin
 
-	c := make(chan os.Signal)
+	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 	signal.Notify(c, syscall.SIGTERM)
 
