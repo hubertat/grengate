@@ -163,3 +163,27 @@ func TestCommand_SnapshotUnaffectedByPollBeforeDispatch(t *testing.T) {
 		}
 	}
 }
+
+// The write lane GrentonSet configures merges partial thermostat commands field-wise
+// (stage 5 sends them; the merge policy is in place now).
+func TestWriteLane_MergesPartialThermostatCommands(t *testing.T) {
+	gs, g := newTestSet(t, allKindsClu())
+	h := g.HoldNext(fakeSetPath)
+	blocker := gs.writer.Submit(lightCmd("DOU0001", true))[0]
+	h.Wait(t)
+	first := gs.writer.Submit(thermoCmd(ptr(23.0), nil, nil, 0))[0]
+	second := gs.writer.Submit(thermoCmd(nil, ptr(1), ptr(1), 0))[0]
+	h.Release()
+	waitResult(t, blocker)
+	if r1, r2 := waitResult(t, first), waitResult(t, second); r1.Outcome != OutcomeOK || r2.Outcome != OutcomeOK {
+		t.Errorf("outcomes %v, %v; want both acknowledged", r1.Outcome, r2.Outcome)
+	}
+	reqs := g.Requests(fakeSetPath)
+	if len(reqs) != 2 {
+		t.Fatalf("set requests = %d, want 2", len(reqs))
+	}
+	th, _ := reqs[1].Items[0]["Thermo"].(map[string]any)
+	if len(th) != 3 || th["TempSetpoint"] != 23.0 || th["State"] != 1.0 || th["Mode"] != 1.0 {
+		t.Errorf("thermostat item = %s, want setpoint 23, state 1, mode 1", reqs[1].Body)
+	}
+}
