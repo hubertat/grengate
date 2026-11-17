@@ -151,14 +151,16 @@ func (co *CluObject) appliedLocked(changed bool) ApplyOutcome {
 // guardReads makes HomeKit reads of the accessory's characteristics (all services except
 // the accessory information) answer with an error status while the device is not ready,
 // so it shows as not responding instead of showing made-up defaults (concept 3.5).
+// hap also calls ValueRequest with a nil request to build the /accessories listing, where
+// HAP requires a value for every readable characteristic: that call gets the cached value.
 func (co *CluObject) guardReads(a *accessory.A) {
 	for _, s := range a.Ss {
 		if s.Type == service.TypeAccessoryInformation {
 			continue
 		}
 		for _, c := range s.Cs {
-			c.ValueRequestFunc = func(*http.Request) (any, int) {
-				if !co.isReady() {
+			c.ValueRequestFunc = func(req *http.Request) (any, int) {
+				if req != nil && !co.isReady() {
 					return nil, hkNoResponse
 				}
 				return c.Val, 0

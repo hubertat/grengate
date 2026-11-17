@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -184,5 +185,29 @@ func TestReadiness_InvalidResultKeepsLastGoodValues(t *testing.T) {
 	}
 	if v, status := hkRead(chars["shutter"]); status != 0 {
 		t.Errorf("shutter read = (%v, %d), want status 0", v, status)
+	}
+}
+
+// The /accessories listing (hap marshals characteristics with ValueRequest(nil)) keeps a
+// value for every readable characteristic of a device that is not ready: HAP requires it,
+// and a missing one could make iOS reject the whole bridge. Real reads still fail.
+func TestReadiness_AccessoryListingKeepsValuesOfUnreadDevice(t *testing.T) {
+	clu := allKindsClu()
+	newTestSet(t, clu)
+	for name, c := range stateChars(t, clu) {
+		b, err := json.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := m["value"]; !ok {
+			t.Errorf("%s: listing has no value: %s", name, b)
+		}
+		if _, status := hkRead(c); status != hkNoResponse {
+			t.Errorf("%s: GET status %d, want %d", name, status, hkNoResponse)
+		}
 	}
 }
