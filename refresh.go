@@ -84,13 +84,26 @@ func describeDevice(d device) string {
 	return fmt.Sprintf("%q (%s|%s)", co.Name, clu, co.GetMixedId())
 }
 
-// startup runs what has to happen before the HomeKit server starts: the optional autotest,
-// one refresh, and the start of the refresh cycle. It returns once the startup refresh is
-// complete, whatever its outcome; the request timeout bounds how long that takes.
+// startup runs what has to happen before the HomeKit server is created: the optional
+// autotest and one refresh. It returns once the startup refresh is complete, whatever its
+// outcome (the request timeout bounds how long that takes), and HomeKit shows its result.
+// The refresh cycle starts separately (startCycling), once the HomeKit server exists.
 func (gs *GrentonSet) startup(ctx context.Context, autotest bool) {
 	if autotest {
 		gs.Autotest()
 	}
+	c := gs.Refresh()
+	// No HomeKit controller is connected before the server starts, so the syncer cannot be
+	// blocked by one: HomeKit starts with the state just read.
+	<-gs.hkSync.flushed()
+	gs.Logf("startup refresh: %d of %d devices read (%d missing or invalid, %d failed) in %d ms",
+		c.Applied, c.Objects, c.Missing, c.Failed, c.Duration.Milliseconds())
+}
+
+// startCycling starts the refresh scheduler until ctx ends. Cycle boundaries count from
+// now. Call it after the HomeKit server was created: hap.NewServer sets up the
+// characteristics, which must not be synced concurrently.
+func (gs *GrentonSet) startCycling(ctx context.Context) {
 	clk := gs.clock
 	if clk == nil {
 		clk = realClock{}
@@ -99,16 +112,8 @@ func (gs *GrentonSet) startup(ctx context.Context, autotest bool) {
 	if cycle <= 0 {
 		cycle = 10 * time.Second
 	}
-	origin := clk.Now()
-	c := gs.Refresh()
-	// No HomeKit controller is connected before the server starts, so the syncer cannot be
-	// blocked by one: HomeKit starts with the state just read.
-	<-gs.hkSync.flushed()
-	gs.Logf("startup refresh: %d of %d devices read (%d missing or invalid, %d failed) in %d ms",
-		c.Applied, c.Objects, c.Missing, c.Failed, c.Duration.Milliseconds())
-
 	s := &refreshScheduler{
-		origin:  origin,
+		origin:  clk.Now(),
 		cycle:   cycle,
 		clock:   clk,
 		refresh: func() { gs.Refresh() },

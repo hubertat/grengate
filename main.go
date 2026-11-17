@@ -53,19 +53,9 @@ func main() {
 	gren.startWorkers()
 	defer gren.Stop()
 
-	// Autotest, startup refresh and refresh cycle: HomeKit starts only after the startup
-	// refresh has an outcome for every device.
+	// Autotest and startup refresh: HomeKit starts only after the startup refresh has an
+	// outcome for every device.
 	gren.startup(ctx, gren.PerformAutotest || *performAutotest)
-
-	if gren.InputServerPort > 0 {
-		log.Printf("Starting input server (listening on port %d)\n", gren.InputServerPort)
-		grentonIn := NewInputServer(&gren, gren.InputServerPort)
-		go func() {
-			log.Fatal(grentonIn.Run())
-		}()
-	} else {
-		log.Println("Input server disabled")
-	}
 
 	log.Print("HomeKit init")
 
@@ -92,6 +82,21 @@ func main() {
 	}
 
 	server.Pin = gren.HkPin
+
+	// Everything that syncs device state to HomeKit starts after hap.NewServer has set up
+	// the characteristics.
+	log.Println("Starting update cycles")
+	gren.startCycling(ctx)
+
+	if gren.InputServerPort > 0 {
+		log.Printf("Starting input server (listening on port %d)\n", gren.InputServerPort)
+		grentonIn := NewInputServer(&gren, gren.InputServerPort)
+		go func() {
+			log.Fatal(grentonIn.Run())
+		}()
+	} else {
+		log.Println("Input server disabled")
+	}
 
 	err = server.ListenAndServe(ctx)
 	if err != nil {

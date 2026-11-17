@@ -197,7 +197,7 @@ func TestScheduler_StopsWithContext(t *testing.T) {
 	}
 }
 
-func TestStartup_SchedulesRefreshesFromStartupOrigin(t *testing.T) {
+func TestStartup_DoesNotStartCycling(t *testing.T) {
 	clk := newFakeClock(time.Now())
 	gs, g := newTestSetWith(t, func(gs *GrentonSet) { gs.clock = clk }, lightsClu(2))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -207,8 +207,24 @@ func TestStartup_SchedulesRefreshesFromStartupOrigin(t *testing.T) {
 	if n := g.RequestCount(fakeReadPath); n != 1 {
 		t.Fatalf("read requests after startup = %d, want 1", n)
 	}
+	select {
+	case d := <-clk.afters:
+		t.Fatalf("startup started the refresh cycle (wait of %v); that must wait until HomeKit is set up", d)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestStartCycling_FirstBoundaryOneCycleAfterStart(t *testing.T) {
+	clk := newFakeClock(time.Now())
+	gs, g := newTestSetWith(t, func(gs *GrentonSet) { gs.clock = clk }, lightsClu(2))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	gs.startup(ctx, false)
+	clk.Advance(7 * time.Second) // HomeKit setup between startup and cycling
+	gs.startCycling(ctx)
 	if d := clk.nextWait(t); d != 10*time.Second {
-		t.Errorf("first wait = %v, want the 10 s cycle", d)
+		t.Errorf("first wait = %v, want the full 10 s cycle from the start of cycling", d)
 	}
 	clk.Advance(10 * time.Second)
 	g.WaitForRequests(t, fakeReadPath, 2)

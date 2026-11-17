@@ -105,7 +105,7 @@ Configuration is JSON-based. See `config.json.example` for structure:
 2. The read lane POSTs arrays of up to `QueryLimit` items to `ReadPath`
 3. The completion hook (`readCompleted`) finds the device in the registry, `applyRead` validates and stores the item, and the HomeKit syncer (`hk_sync.go`) pushes it to HomeKit
 4. Refresh counts applied/changed/discarded/missing-or-invalid/failed and reports a metrics event
-5. One refresh runs at startup before the HomeKit server (`startup()`), then `refreshScheduler` (`scheduler.go`) runs one per cycle boundary, skipping boundaries that pass during a refresh
+5. One refresh runs at startup before the HomeKit server (`startup()`); after `hap.NewServer`, `startCycling()` starts `refreshScheduler` (`scheduler.go`), which runs one refresh per cycle boundary, skipping boundaries that pass during a refresh
 
 **Writing State:**
 1. HomeKit accessory callback triggered (e.g., `Light.Set()`)
