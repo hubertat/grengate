@@ -833,19 +833,30 @@ func TestShutter_UncertainMoveReadOtherDirectionRetried(t *testing.T) {
 }
 
 // The retry of a move that did not run (uncertain, read shows the other direction) does not
-// run either: given up, the target becomes the end stop of the observed direction.
+// run either: given up, the target becomes the end stop of the observed direction. Our
+// commands were involved in that movement, so the clock runs it to the end stop, where the
+// stop the next poll sees leaves the target.
 func TestShutter_UncertainMoveReadOtherDirectionGivenUp(t *testing.T) {
 	checkGoroutines(t)
 	gs, g, sh, clk := readyShutter(t)
+	moveTo(t, gs, sh, 50)
 	g.SetShutter(tCLU, tSID, 20000, 1)
 	g.FailNext(fakeSetPath, 500, 2)
-	hkTarget(t, sh, 40)
+	hkTarget(t, sh, 20)
 	settle(t, gs)
-	assertCmds(t, g, "MOVEDOWN", "MOVEDOWN")
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "MOVEDOWN")
+	assertShown(t, sh, shown{50, 100, hkIncreasing})
+	tick(t, gs, 50)
+	settle(t, gs)
 	assertShown(t, sh, shown{100, 100, hkIncreasing})
 	if clk.running() {
-		t.Error("clock runs for a movement grengate did not start")
+		t.Error("clock running at the end stop")
 	}
+	g.SetShutter(tCLU, tSID, 20000, 0)
+	gs.Refresh()
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 100, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "MOVEDOWN")
 }
 
 // Reconciliation table, row "move, read shows stopped": ambiguous. The simulation ends with
@@ -961,16 +972,17 @@ func TestShutter_UncertainStopReadStillMovingRetried(t *testing.T) {
 
 // The retry of a STOP that did not run (uncertain, read shows still moving, either
 // direction) does not run either: given up, the target becomes the end stop of the observed
-// direction.
+// direction, and the clock runs the movement there; the stop the next poll sees leaves the
+// target at the end stop.
 func TestShutter_UncertainStopReadStillMovingGivenUp(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		state      int // what the reads show
-		want       shown
-		clockAfter bool // the clock runs on: the observed movement is the generation's own
+		name  string
+		state int // what the reads show
+		end   int
+		shown int // position state shown meanwhile
 	}{
-		{"same direction", 2, shown{40, 0, hkDecreasing}, true},
-		{"other direction", 1, shown{40, 100, hkIncreasing}, false},
+		{"same direction", 2, 0, hkDecreasing},
+		{"other direction", 1, 100, hkIncreasing},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			checkGoroutines(t)
@@ -983,10 +995,18 @@ func TestShutter_UncertainStopReadStillMovingGivenUp(t *testing.T) {
 			tick(t, gs, 1)
 			settle(t, gs)
 			assertCmds(t, g, "MOVEDOWN", "STOP", "STOP")
-			assertShown(t, sh, tc.want)
-			if clk.running() != tc.clockAfter {
-				t.Errorf("clock running = %v, want %v", clk.running(), tc.clockAfter)
+			assertShown(t, sh, shown{40, tc.end, tc.shown})
+			tick(t, gs, max(tc.end-40, 40-tc.end))
+			settle(t, gs)
+			assertShown(t, sh, shown{tc.end, tc.end, tc.shown})
+			if clk.running() {
+				t.Error("clock running at the end stop")
 			}
+			g.SetShutter(tCLU, tSID, 20000, 0)
+			gs.Refresh()
+			settle(t, gs)
+			assertShown(t, sh, shown{tc.end, tc.end, hkStopped})
+			assertCmds(t, g, "MOVEDOWN", "STOP", "STOP")
 		})
 	}
 }

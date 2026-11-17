@@ -529,6 +529,11 @@ func (s *shutterSim) didNotRun(c *shutterCommand) {
 		describeDevice(s.sh), c.cmd, s.gen.target, end, s.belief)
 	s.gen.gaveUp = true
 	s.setTarget(end)
+	if s.belief != motorStopped && s.moveGen == 0 {
+		// A movement a read showed after our command: unlike a wall switch's, the clock runs
+		// it to the end stop, where the target now is.
+		s.claim(s.gen.n)
+	}
 }
 
 // claim makes the believed movement generation n's. For the latest generation its travel
