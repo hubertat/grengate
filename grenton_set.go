@@ -46,6 +46,9 @@ type GrentonSet struct {
 	reader *lane
 	writer *lane
 	hkSync *hkSyncer
+	// metrics receives request, command and refresh events (default: none recorded).
+	metrics Metrics
+	overlap overlapTracker
 
 	// refreshMu lets only one refresh run at a time.
 	refreshMu sync.Mutex
@@ -114,6 +117,9 @@ func (gs *GrentonSet) startWorkers() {
 	if gs.QueryLimit <= 0 {
 		gs.QueryLimit = 30
 	}
+	if gs.metrics == nil {
+		gs.metrics = noMetrics{}
+	}
 	gs.hkSync = newHkSyncer()
 	gs.hkSync.start()
 
@@ -125,6 +131,8 @@ func (gs *GrentonSet) startWorkers() {
 		asArray:    true,
 		merge:      mergeKeepPending,
 		stamps:     &gs.stamps,
+		overlap:    &gs.overlap,
+		metrics:    gs.metrics,
 		logf:       gs.Logf,
 		debugf:     gs.Debugf,
 		onComplete: gs.readCompleted,
@@ -140,6 +148,8 @@ func (gs *GrentonSet) startWorkers() {
 		asArray:    false,
 		merge:      mergeReplace,
 		stamps:     &gs.stamps,
+		overlap:    &gs.overlap,
+		metrics:    gs.metrics,
 		logf:       gs.Logf,
 		debugf:     gs.Debugf,
 		onComplete: gs.writeCompleted,

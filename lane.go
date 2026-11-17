@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -164,6 +165,10 @@ type laneConfig struct {
 	merge   mergeFunc
 	// stamps is the process-wide completion counter shared by both lanes.
 	stamps *atomic.Uint64
+	// overlap is shared by both lanes; metrics receives one event per request and, on the
+	// write lane, one per finished command.
+	overlap *overlapTracker
+	metrics Metrics
 
 	logf, debugf func(string, ...any)
 
@@ -198,6 +203,12 @@ func newLane(cfg laneConfig) *lane {
 	}
 	if cfg.stamps == nil {
 		cfg.stamps = new(atomic.Uint64)
+	}
+	if cfg.overlap == nil {
+		cfg.overlap = &overlapTracker{}
+	}
+	if cfg.metrics == nil {
+		cfg.metrics = noMetrics{}
 	}
 	if cfg.logf == nil {
 		cfg.logf = func(string, ...any) {}
@@ -346,13 +357,16 @@ func (l *lane) send(batch []*laneEntry) {
 	for _, e := range batch {
 		e.sent = sent
 	}
+	overlapped := false
 	if err == nil {
 		if l.cfg.onSent != nil {
 			l.cfg.onSent(batch)
 		}
 		l.cfg.debugf("%s lane: request body: %s", l.cfg.kind, body)
 		var resp []byte
+		l.cfg.overlap.begin(l.cfg.kind)
 		resp, err = l.client.post(l.ctx, body)
+		overlapped = l.cfg.overlap.end(l.cfg.kind)
 		if err == nil {
 			l.cfg.debugf("%s lane: response body: %s", l.cfg.kind, resp)
 			var results []laneResult
@@ -362,7 +376,7 @@ func (l *lane) send(batch []*laneEntry) {
 				results, err = decodeReadResponse(batch, resp)
 			}
 			if err == nil {
-				l.complete(batch, results, sent, len(body), nil)
+				l.complete(batch, results, sent, len(body), overlapped, nil)
 				return
 			}
 		}
@@ -376,23 +390,51 @@ func (l *lane) send(batch []*laneEntry) {
 	for i := range results {
 		results[i] = laneResult{Outcome: failed, Err: err}
 	}
-	l.complete(batch, results, sent, len(body), err)
+	l.complete(batch, results, sent, len(body), overlapped, err)
 }
 
-func (l *lane) complete(batch []*laneEntry, results []laneResult, sent time.Time, bytes int, reqErr error) {
+// complete stamps the results, reports the request (log line and metrics), runs the
+// completion hook per entry and delivers the outcomes.
+func (l *lane) complete(batch []*laneEntry, results []laneResult, sent time.Time, bytes int, overlapped bool, reqErr error) {
 	done := time.Now()
 	stamp := l.cfg.stamps.Add(1)
-	ms := done.Sub(sent).Milliseconds()
-	if reqErr != nil {
-		l.cfg.logf("%s lane: request of %d items, %d bytes failed after %d ms: %v", l.cfg.kind, len(batch), bytes, ms, reqErr)
-	} else {
-		l.cfg.debugf("%s lane: request of %d items, %d bytes done in %d ms", l.cfg.kind, len(batch), bytes, ms)
+
+	ev := RequestEvent{
+		Lane: l.cfg.kind, Time: done, Items: len(batch), Bytes: bytes,
+		HTTP: done.Sub(sent), Success: reqErr == nil, Overlap: overlapped,
 	}
+	clus := map[string]bool{}
+	for _, e := range batch {
+		clus[strings.ToLower(e.obj.Clu)] = true
+		if w := sent.Sub(e.firstSubmit()); w > ev.QueueWait {
+			ev.QueueWait = w
+		}
+	}
+	ev.Clus = len(clus)
+	if len(batch) == 1 {
+		ev.Clu, ev.Id = batch[0].obj.Clu, batch[0].obj.Id
+	}
+	if reqErr != nil {
+		l.cfg.logf("%s lane: request of %d items, %d bytes failed after %d ms: %v",
+			l.cfg.kind, ev.Items, ev.Bytes, ev.HTTP.Milliseconds(), reqErr)
+	} else {
+		l.cfg.debugf("%s lane: request of %d items, %d bytes, %d ms (queue wait %d ms, overlap %v)",
+			l.cfg.kind, ev.Items, ev.Bytes, ev.HTTP.Milliseconds(), ev.QueueWait.Milliseconds(), ev.Overlap)
+	}
+	l.cfg.metrics.Request(ev)
+
 	for i, e := range batch {
 		r := results[i]
 		r.Stamp, r.Sent, r.Completed = stamp, sent, done
 		if l.cfg.onComplete != nil {
 			l.cfg.onComplete(e, &r)
+		}
+		if l.cfg.kind == writeLane {
+			first := e.firstSubmit()
+			l.cfg.metrics.Command(CommandEvent{
+				Time: done, Clu: e.obj.Clu, Id: e.obj.Id, Outcome: r.Outcome,
+				QueueWait: sent.Sub(first), HTTP: done.Sub(sent), Total: done.Sub(first),
+			})
 		}
 		for _, s := range e.subs {
 			s.deliver(r)

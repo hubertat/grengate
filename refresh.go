@@ -59,6 +59,7 @@ func (gs *GrentonSet) Refresh() refreshCounts {
 	}
 	<-gs.hkSync.flushed()
 	c.Duration = time.Since(start)
+	gs.metrics.Refresh(RefreshEvent{Time: time.Now(), Counts: c})
 
 	summary := fmt.Sprintf("refresh: %d devices in %d ms: %d applied (%d changed), %d discarded, %d missing or invalid, %d failed",
 		c.Objects, c.Duration.Milliseconds(), c.Applied, c.Changed, c.Discarded, c.Missing, c.Failed)
