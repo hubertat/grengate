@@ -9,6 +9,10 @@ import (
 	"github.com/brutella/hap/service"
 )
 
+// minShutterMaxTime is the shortest travel time (ms) the movement simulation can work with:
+// the simulated position advances every MaxTime/100 ms.
+const minShutterMaxTime = 100
+
 type shutterCmd int
 
 const (
@@ -47,6 +51,7 @@ func (sh *Shutter) InitAll() {
 
 	sh.currentPosition = 100
 	sh.targetPosition = 100
+	sh.cancelMovement = make(chan bool)
 
 	sh.AppendHk()
 }
@@ -90,6 +95,13 @@ func (sh *Shutter) Sync() {
 
 // SetPosition check which direction should move and call StartMoving func
 func (sh *Shutter) SetPosition(target int) {
+	if sh.MaxTime < minShutterMaxTime {
+		sh.clu.set.Logf("Shutter %s (%s): move to %d refused, MaxTime %d ms is below %d ms (not read from GATE yet?)",
+			sh.Name, sh.GetMixedId(), target, sh.MaxTime, minShutterMaxTime)
+		sh.hk.WindowCovering.TargetPosition.SetValue(sh.currentPosition)
+		return
+	}
+
 	sh.clu.set.Debugf("Shutter SetPosition | target: %d\tcurrent: %d\told target: %d\n", target, sh.currentPosition, sh.targetPosition)
 	sh.hk.WindowCovering.TargetPosition.SetValue(target)
 	sh.targetPosition = target
@@ -126,7 +138,7 @@ func (sh *Shutter) SetPosition(target int) {
 		sh.clu.set.Error(err)
 		return
 	}
-	if sh.looping || period <= 0 {
+	if sh.looping {
 		sh.cancelMovement <- true
 		return
 	}
