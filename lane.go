@@ -114,6 +114,30 @@ func mergeKeepPending(pending, _ ReqObject) (ReqObject, bool) { return pending, 
 // mergeReplace is the write lane policy for lights and shutters: latest command wins.
 func mergeReplace(_, incoming ReqObject) (ReqObject, bool) { return incoming, true }
 
+// mergeCommand is the write lane policy (concept 3.2): a thermostat command is merged
+// field-wise into the pending one (the fields of the newer command win, the others stay)
+// and the older submitters share the merged command's outcome; every other command
+// replaces the pending one. The merged command keeps the newer command's sequence number.
+func mergeCommand(pending, incoming ReqObject) (ReqObject, bool) {
+	if pending.Thermo == nil || incoming.Thermo == nil {
+		return mergeReplace(pending, incoming)
+	}
+	t := *pending.Thermo
+	in := incoming.Thermo
+	if in.TempSetpoint != nil {
+		t.TempSetpoint = in.TempSetpoint
+	}
+	if in.State != nil {
+		t.State = in.State
+	}
+	if in.Mode != nil {
+		t.Mode = in.Mode
+	}
+	merged := incoming
+	merged.Thermo = &t
+	return merged, false
+}
+
 type laneSub struct {
 	ch chan laneResult
 	at time.Time

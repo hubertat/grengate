@@ -162,7 +162,7 @@ func (gs *GrentonSet) startWorkers() {
 		timeout:    gs.requestTimeout,
 		maxItems:   1,
 		asArray:    false,
-		merge:      mergeReplace,
+		merge:      mergeCommand,
 		stamps:     &gs.stamps,
 		overlap:    &gs.overlap,
 		metrics:    gs.metrics,
