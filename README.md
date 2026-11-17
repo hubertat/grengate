@@ -79,9 +79,11 @@ All devices are read from the GATE every `CycleInSeconds` (default 10), at most 
 The first read happens at startup, before HomeKit is started. A refresh that takes longer than a cycle is not followed by an
 immediate second one: the next refresh starts at the next cycle boundary, and the skipped cycles are logged.
 
-Thermostats are read less often: at most every `ThermoCycleInSeconds` (default 60, so every sixth cycle with the default
-`CycleInSeconds`), rounded to whole cycles. A thermostat that has not been read successfully yet is read in every cycle.
-With `ThermoCycleInSeconds` at or below `CycleInSeconds` thermostats are read in every cycle.
+Thermostats are read less often: about every `ThermoCycleInSeconds` (default 60, so every sixth cycle with the default
+`CycleInSeconds`), rounded to whole cycles. A thermostat that has not been read successfully yet is read in every cycle, and one
+whose read failed is read again in the next cycle. With `ThermoCycleInSeconds` at or below `CycleInSeconds` thermostats are read
+in every cycle. With `LegacyWriteScript` set to `true` thermostats are always read in every cycle: their commands carry all three
+values from the last read, which must be fresh.
 
 `FreshInSeconds` is no longer used. It is still accepted, so older config files load unchanged.
 
@@ -92,7 +94,7 @@ command per device wins while it waits. After every write grengate reads the dev
 
 | Field | Default | Meaning |
 |---|---|---|
-| `LegacyWriteScript` | `false` | `false`: array requests, thermostat commands carry only the changed value (temperature, or state and mode). Needs the new `grenton/update-script.lua`. `true`: one single-object request per command with all three thermostat values, as the old script needs |
+| `LegacyWriteScript` | `false` | `false`: array requests, thermostat commands carry only the changed value: the temperature (`{TempSetpoint}`), state and mode for heat or auto (`{State, Mode}`), or the state alone for off (`{State: 0}`, which keeps the mode). Needs the new `grenton/update-script.lua`. `true`: one single-object request per command with all three thermostat values, as the old script needs |
 | `SetterQueueSize` | `5` | Commands per write request. Ignored when `LegacyWriteScript` is `true` |
 | `SetterFlushMs` | `30` | Batching window: after the first command the write lane waits this long, so a scene leaves in as few requests as possible. Ignored when `LegacyWriteScript` is `true` |
 
@@ -106,6 +108,7 @@ with `true` such a change is refused (HomeKit shows an error) until the thermost
    A binary from before the lanes (stage 2 of the plan) works with them too, but needs step 1 of the manual check with its own pass criteria.
 2. Then deploy this binary. It uses the new protocol by default.
 3. If writes fail with the new protocol, set `"LegacyWriteScript": true` and restart: single-object writes work with the new script as well.
+   If the binary goes out before the scripts, the old script runs none of the array writes; the log then shows an `ERROR` line (at most once a minute) saying so.
 
 #### metrics (InfluxDB v2)
 

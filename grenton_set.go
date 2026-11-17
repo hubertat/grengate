@@ -49,9 +49,11 @@ type GrentonSet struct {
 	// first command arrives at an idle lane, the lane waits this long before it sends.
 	// Ignored with LegacyWriteScript.
 	SetterFlushMs int
-	// ThermoCycleInSeconds is the minimum time between polls of a thermostat (default 60);
-	// thermostats that are not ready are polled in every refresh. At or below CycleInSeconds
-	// thermostats are polled in every refresh.
+	// ThermoCycleInSeconds: a ready thermostat is polled about every this many seconds
+	// (default 60), rounded to whole refresh cycles; at or below CycleInSeconds in every
+	// refresh. Thermostats that are not ready, or whose last poll failed, are polled in the
+	// next refresh. Applies in the new write protocol only; with LegacyWriteScript every
+	// refresh polls them.
 	ThermoCycleInSeconds int
 
 	cycleDuration time.Duration

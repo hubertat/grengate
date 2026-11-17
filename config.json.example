@@ -15,7 +15,9 @@
 	## devices per read request (default 30)
 	"QueryLimit": 30,
 
-	## minimum time between reads of a thermostat (default 60); thermostats not read yet are read every cycle
+	## thermostats are read about every this many seconds (default 60), rounded to whole cycles;
+	## thermostats not read yet, or whose last read failed, are read every cycle; with
+	## LegacyWriteScript true thermostats are read every cycle
 	"ThermoCycleInSeconds": 60,
 
 	## write protocol: false (default) sends batched array requests with partial thermostat commands
