@@ -48,6 +48,7 @@ package main
 //	g.Delay(path, d)                every response on path is delayed by d
 //	g.FailNext(path, status, n)     next n requests answered with HTTP status (n < 0: all), not processed
 //	g.BreakBodyNext(path, n)        next n requests answered 200 with a body that is not valid JSON
+//	g.RespondNext(path, body)       next request answered 200 with the given raw body, not processed
 //	g.ClearRules()                  drops delays, pending holds/failures and releases held requests
 //
 // Device manipulation: Omit/Unomit (left out of read responses), DropPayload /
@@ -115,6 +116,7 @@ type fakeRule struct {
 	hang   bool
 	status int
 	broken bool
+	body   []byte
 }
 
 type fakeGate struct {
@@ -349,6 +351,11 @@ func (g *fakeGate) BreakBodyNext(path string, n int) {
 	g.addRule(&fakeRule{path: path, times: n, broken: true})
 }
 
+// RespondNext answers the next request on path with status 200 and body, without processing it.
+func (g *fakeGate) RespondNext(path, body string) {
+	g.addRule(&fakeRule{path: path, times: 1, body: []byte(body)})
+}
+
 // ClearRules drops delays and pending rules; held requests are released.
 func (g *fakeGate) ClearRules() {
 	g.mu.Lock()
@@ -454,6 +461,10 @@ func (g *fakeGate) handle(w http.ResponseWriter, r *http.Request) {
 	case rule != nil && rule.broken:
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"Clu": [broken`))
+		return
+	case rule != nil && rule.body != nil:
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(rule.body)
 		return
 	}
 	if status != 0 {
