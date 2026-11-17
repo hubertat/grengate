@@ -181,3 +181,62 @@ func TestBatching_TenLightsTwoRequestsOfFive(t *testing.T) {
 		}
 	}
 }
+
+// Commands submitted after the window opened still leave with the first one, in one request.
+func TestBatching_SubmissionsAfterWindowOpenedJoinIt(t *testing.T) {
+	g := newFakeGate(t)
+	g.SetWriteStyle(fakeNewStyle)
+	for i := 1; i <= 4; i++ {
+		g.SetLight(tCLU, lightId(i), false)
+	}
+	l, timers := newBatchingLane(t, g, 5)
+
+	chans := []<-chan laneResult{l.Submit(lightCmd(lightId(1), true))[0]}
+	eventually(t, 2*time.Second, timers.running, "the batching window to open")
+	for i := 2; i <= 4; i++ {
+		chans = append(chans, l.Submit(lightCmd(lightId(i), true))[0])
+	}
+	if n := g.RequestCount(fakeSetPath); n != 0 {
+		t.Fatalf("%d requests sent while the window is open", n)
+	}
+	fireWindow(t, timers)
+	for _, ch := range chans {
+		waitResult(t, ch)
+	}
+	reqs := g.Requests(fakeSetPath)
+	if len(reqs) != 1 || !slices.Equal(itemIds(reqs[0]), lightIds(1, 4)) {
+		t.Errorf("requests %v, want one array of DOU0001..4", reqs)
+	}
+}
+
+// A command submitted while the worker is between finding the mailbox empty and taking
+// from it still gets the window. The race is short, so it is provoked by submitting right
+// after the worker starts, many times.
+func TestBatching_SubmissionRacingTheWorkerGetsWindow(t *testing.T) {
+	g := newFakeGate(t)
+	g.SetLight(tCLU, lightId(1), false)
+	for i := 0; i < 300; i++ {
+		timers := newFakeTimers()
+		l := newLane(laneConfig{
+			kind: writeLane, url: g.URL() + fakeSetPath, timeout: 2 * time.Second,
+			asArray: true, maxItems: 5, merge: mergeCommand, window: 30 * time.Millisecond, timers: timers,
+		})
+		l.start()
+		for spin := time.Now().Add(time.Duration(i%40) * time.Microsecond); time.Now().Before(spin); {
+			// vary when the submission lands relative to the worker's first look at the mailbox
+		}
+		ch := l.Submit(lightCmd(lightId(1), true))[0]
+		eventually(t, 2*time.Second, func() bool { return timers.running() || g.RequestCount(fakeSetPath) > 0 },
+			"the window to open or a request to be sent")
+		if n := g.RequestCount(fakeSetPath); n > 0 {
+			l.stop()
+			t.Fatalf("iteration %d: the command left without a window", i)
+		}
+		timers.fire(t)
+		waitResult(t, ch)
+		l.stop()
+		g.mu.Lock()
+		g.requests = nil
+		g.mu.Unlock()
+	}
+}
