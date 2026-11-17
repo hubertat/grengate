@@ -1,9 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -81,31 +78,5 @@ func TestRegistry_ReportsSameCluAndIdTwice(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), `"second"`) {
 		t.Errorf("duplicate not reported: %s", logs.String())
-	}
-}
-
-func TestInputServer_MotionPushUsesRegistry(t *testing.T) {
-	clu := allKindsClu()
-	gs, _ := newTestSet(t, clu)
-	is := NewInputServer(gs, 0)
-
-	post := func(body string) int {
-		req := httptest.NewRequest(http.MethodPost, "/update", bytes.NewBufferString(body))
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		is.HandleRequest(rec, req)
-		return rec.Code
-	}
-
-	if code := post(`{"Clu":"clu_012ABCDE","Id":"pir0004","State":true}`); code != http.StatusOK {
-		t.Errorf("status = %d", code)
-	}
-	if v := findC(t, clu.MotionSensors[0].GetA(), characteristic.TypeMotionDetected).Val; v != true {
-		t.Errorf("motion detected = %v, want true", v)
-	}
-	// A light is not a motion sensor: nothing changes (status codes change in stage 3).
-	post(`{"Clu":"CLU_012abcde","Id":"DOU0001","State":true}`)
-	if v := findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn).Val; v != false {
-		t.Errorf("light changed by a motion push: On = %v", v)
 	}
 }

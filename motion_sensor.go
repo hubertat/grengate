@@ -57,12 +57,17 @@ func (ms *MotionSensor) appendHk() *accessory.A {
 	return ms.hkAccessory
 }
 
-// Set applies a pushed state (input server) and shows it in HomeKit.
+// Set applies a pushed state (input server) under rule 3 of concept 3.3: it bumps the
+// generation, so a poll result from a read sent before the push is discarded. A push
+// carries the sensor's whole state, so the sensor is ready from then on. HomeKit is
+// updated through the syncer.
 func (ms *MotionSensor) Set(state bool) {
 	ms.mu.Lock()
 	ms.State = state
+	ms.gen++
+	ms.ready = true
 	ms.mu.Unlock()
-	ms.Sync()
+	ms.clu.set.hkSync.mark(ms)
 }
 
 // Sync pushes the state to HomeKit.
