@@ -42,9 +42,10 @@ func (is *InputServer) HandleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sensor, err := is.gSet.FindMotionSensor(inputPayload.Clu, inputPayload.Id)
-	if err != nil {
-		is.gSet.Error(err)
+	d, _ := is.gSet.registry.find(inputPayload.Clu, inputPayload.Id)
+	sensor, ok := d.(*MotionSensor)
+	if !ok {
+		is.gSet.Error(fmt.Errorf("sensor not found [clu: %s id: %s]", inputPayload.Clu, inputPayload.Id))
 		return
 	}
 

@@ -200,22 +200,19 @@ func (sh *Shutter) sendCmd(cmd shutterCmd) error {
 	return err
 }
 
-// LoadReqObject checks object received from http request end reads it into Shutter
-func (sh *Shutter) LoadReqObject(obj ReqObject) error {
+// LoadReqObject applies a read item and pushes the state to HomeKit.
+func (sh *Shutter) LoadReqObject(obj ReqObject) error { return loadReqObject(sh, obj) }
+
+func (sh *Shutter) applyRead(obj ReqObject) (bool, error) {
 	if obj.Kind != "Shutter" {
-		return fmt.Errorf("Shutter LoadReqObject: wrong object kind (%s)", obj.Kind)
+		return false, fmt.Errorf("Shutter: wrong object kind (%s)", obj.Kind)
 	}
-
 	if obj.Shutter == nil {
-		return fmt.Errorf("Shutter LoadReqObject: missing Shutter object")
+		return false, fmt.Errorf("Shutter: missing Shutter object")
 	}
-
-	sh.clu.set.Debugf("Shutter LoadReqObject loading: \n%+v", obj)
-
+	changed := !sh.loaded || sh.State != obj.Shutter.State || sh.MaxTime != obj.Shutter.MaxTime
 	sh.State = obj.Shutter.State
 	sh.MaxTime = obj.Shutter.MaxTime
-
-	sh.Sync()
-
-	return nil
+	sh.loaded = true
+	return changed, nil
 }

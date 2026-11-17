@@ -34,6 +34,9 @@ type CluObject struct {
 	Req ReqObject `json:"-"`
 
 	clu *Clu `json:"-"`
+
+	// loaded is set once a valid read result has been applied.
+	loaded bool
 }
 
 func (co *CluObject) GetLongId() uint64 {

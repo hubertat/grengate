@@ -37,19 +37,20 @@ func (gl *Light) validateHkType() error {
 		gl.Name, gl.Kind, gl.Id, gl.HkType, HkTypeLightbulb, HkTypeOutlet)
 }
 
-func (gl *Light) LoadReqObject(obj ReqObject) error {
+// LoadReqObject applies a read item and pushes the state to HomeKit.
+func (gl *Light) LoadReqObject(obj ReqObject) error { return loadReqObject(gl, obj) }
+
+func (gl *Light) applyRead(obj ReqObject) (bool, error) {
 	if obj.Kind != "Light" {
-		return fmt.Errorf("Light LoadReqObject: wrong object kind (%s)", obj.Kind)
+		return false, fmt.Errorf("Light: wrong object kind (%s)", obj.Kind)
 	}
-
 	if obj.Light == nil {
-		return fmt.Errorf("Light LoadReqObject: missing Light object")
+		return false, fmt.Errorf("Light: missing Light object")
 	}
-
+	changed := !gl.loaded || gl.State != obj.Light.State
 	gl.State = obj.Light.State
-	gl.Sync()
-
-	return nil
+	gl.loaded = true
+	return changed, nil
 }
 
 func (gl *Light) InitAll() {

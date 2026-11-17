@@ -29,29 +29,32 @@ func (gt *Thermo) GetHkState() (hkState int) {
 	return
 }
 
-func (gt *Thermo) LoadReqObject(obj ReqObject) error {
+// LoadReqObject applies a read item and pushes the state to HomeKit.
+func (gt *Thermo) LoadReqObject(obj ReqObject) error { return loadReqObject(gt, obj) }
+
+func (gt *Thermo) applyRead(obj ReqObject) (bool, error) {
 	if obj.Kind != "Thermo" {
-		return fmt.Errorf("Thermo LoadReqObject: wrong object kind (%s)", obj.Kind)
+		return false, fmt.Errorf("Thermo: wrong object kind (%s)", obj.Kind)
 	}
-
 	if obj.Thermo == nil {
-		return fmt.Errorf("Thermo LoadReqObject: missing Thermo object")
+		return false, fmt.Errorf("Thermo: missing Thermo object")
 	}
+	in := obj.Thermo
+	changed := !gt.loaded ||
+		gt.TempCurrent != in.TempCurrent || gt.TempSetpoint != in.TempSetpoint || gt.TempTarget != in.TempTarget ||
+		gt.TempMin != in.TempMin || gt.TempMax != in.TempMax || gt.TempHoliday != in.TempHoliday ||
+		gt.State != in.State || gt.Mode != in.Mode
 
-	gt.clu.set.Debugf("Thermo LoadReqObject loading: \n%+v", obj)
-
-	gt.TempCurrent = obj.Thermo.TempCurrent
-	gt.TempSetpoint = obj.Thermo.TempSetpoint
-	gt.TempTarget = obj.Thermo.TempTarget
-	gt.TempMin = obj.Thermo.TempMin
-	gt.TempMax = obj.Thermo.TempMax
-	gt.TempHoliday = obj.Thermo.TempHoliday
-	gt.State = obj.Thermo.State
-	gt.Mode = obj.Thermo.Mode
-
-	gt.Sync()
-
-	return nil
+	gt.TempCurrent = in.TempCurrent
+	gt.TempSetpoint = in.TempSetpoint
+	gt.TempTarget = in.TempTarget
+	gt.TempMin = in.TempMin
+	gt.TempMax = in.TempMax
+	gt.TempHoliday = in.TempHoliday
+	gt.State = in.State
+	gt.Mode = in.Mode
+	gt.loaded = true
+	return changed, nil
 }
 
 func (gt *Thermo) InitAll() {

@@ -56,24 +56,29 @@ func (ms *MotionSensor) appendHk() *accessory.A {
 	return ms.hkAccessory
 }
 
+// Set applies a pushed state (input server) and shows it in HomeKit.
 func (ms *MotionSensor) Set(state bool) {
 	ms.State = state
-	ms.hkService.MotionDetected.SetValue(state)
+	ms.Sync()
 }
 
-// LoadReqObject checks object received from http request end reads it into MotionSensor
-func (ms *MotionSensor) LoadReqObject(obj ReqObject) error {
+// Sync pushes the state to HomeKit.
+func (ms *MotionSensor) Sync() {
+	ms.hkService.MotionDetected.SetValue(ms.State)
+}
+
+// LoadReqObject applies a read item and pushes the state to HomeKit.
+func (ms *MotionSensor) LoadReqObject(obj ReqObject) error { return loadReqObject(ms, obj) }
+
+func (ms *MotionSensor) applyRead(obj ReqObject) (bool, error) {
 	if obj.Kind != "MotionSensor" {
-		return fmt.Errorf("MotionSensor LoadReqObject: wrong object kind (%s)", obj.Kind)
+		return false, fmt.Errorf("MotionSensor: wrong object kind (%s)", obj.Kind)
 	}
-
 	if obj.MotionSensor == nil {
-		return fmt.Errorf("MotionSensor LoadReqObject: missing MotionSensor object")
+		return false, fmt.Errorf("MotionSensor: missing MotionSensor object")
 	}
-
-	ms.clu.set.Debugf("MotionSensor LoadReqObject loading: \n%+v", obj)
-
-	ms.Set(obj.MotionSensor.State)
-
-	return nil
+	changed := !ms.loaded || ms.State != obj.MotionSensor.State
+	ms.State = obj.MotionSensor.State
+	ms.loaded = true
+	return changed, nil
 }

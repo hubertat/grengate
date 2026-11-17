@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/brutella/hap/accessory"
@@ -39,6 +38,8 @@ type GrentonSet struct {
 
 	broker GateBroker
 	setter GateBroker
+
+	registry *registry
 }
 
 // Debugf logs info, when Verbose option is on
@@ -125,6 +126,7 @@ func (gs *GrentonSet) InitClus() {
 		clu.InitAll()
 	}
 	gs.checkDuplicateIds()
+	gs.registry = newRegistry(gs.Clus, gs.Logf)
 }
 
 // checkDuplicateIds logs one line per accessory ID that is already used by another
@@ -212,112 +214,15 @@ func (gs *GrentonSet) Refresh() {
 
 func (gs *GrentonSet) update(data []ReqObject) {
 	for _, object := range data {
-		var err error
-		switch object.Kind {
-		default:
-			gs.Logf("GrentonSet RequestAndUpdate: unmatched object kind: %s\n", object.Kind)
-		case "Light":
-			var light *Light
-			light, err = gs.FindLight(object.Clu, object.Id)
-			if err == nil {
-				gs.Debugf("GrentonSet RequestAndUpdate: found light from request, state: %+v\n", object)
-				err = light.LoadReqObject(object)
-			}
-		case "Thermo":
-			var thermo *Thermo
-			thermo, err = gs.FindThermo(object.Clu, object.Id)
-			if err == nil {
-				gs.Debugf("GrentonSet RequestAndUpdate: found thermo from request, state: %+v\n", object)
-				err = thermo.LoadReqObject(object)
-			}
-		case "Shutter":
-			var shutter *Shutter
-			shutter, err = gs.FindShutter(object.Clu, object.Id)
-			if err == nil {
-				gs.Debugf("GrentonSet RequestAndUpdate: found shutter from request, state: %+v\n", object)
-				err = shutter.LoadReqObject(object)
-			}
-		case "MotionSensor":
-			var sensor *MotionSensor
-			sensor, err = gs.FindMotionSensor(object.Clu, object.Id)
-			if err == nil {
-				gs.Debugf("GrentonSet RequestAndUpdate: found motion sensor from request, state: %v\n", object)
-				err = sensor.LoadReqObject(object)
-			}
+		d, ok := gs.registry.find(object.Clu, object.Id)
+		if !ok {
+			gs.Logf("GrentonSet update: no device %s|%s (%s) configured", object.Clu, object.Id, object.Kind)
+			continue
 		}
-		if err != nil {
-			gs.Error(errors.Wrapf(err, "RequestAndUpdate loading [%s|%s] failed.", object.Clu, object.Id))
+		if err := loadReqObject(d, object); err != nil {
+			gs.Error(errors.Wrapf(err, "loading [%s|%s] failed", object.Clu, object.Id))
 		}
 	}
-}
-
-// FindThermo returns a Thermo object belonging to selected clu and with selected id
-func (gs *GrentonSet) FindThermo(fClu, fLight string) (found *Thermo, err error) {
-	gs.Debugf("GrentonSet FindThermo: Looking for thermo: in %s id: %s\n", fLight, fClu)
-	for _, clu := range gs.Clus {
-		if clu.GetMixedId() == fClu {
-			for _, thermo := range clu.Therms {
-				if thermo.GetMixedId() == fLight && thermo != nil {
-					found = thermo
-					err = nil
-					return
-				}
-			}
-		}
-	}
-	err = fmt.Errorf("Thermostat not found [clu: %s id: %s]", fLight, fClu)
-	return
-}
-
-// FindLight returns a Light object belonging to selected clu and with selected id
-func (gs *GrentonSet) FindLight(fClu, fLight string) (found *Light, err error) {
-	gs.Debugf("GrentonSet FindLight: Looking for light: in %s id: %s\n", fLight, fClu)
-	for _, clu := range gs.Clus {
-		if clu.GetMixedId() == fClu {
-			for _, light := range clu.Lights {
-				if light.GetMixedId() == fLight && light != nil {
-					found = light
-					err = nil
-					return
-				}
-			}
-		}
-	}
-	err = fmt.Errorf("Light not found [clu: %s id: %s]", fLight, fClu)
-	return
-}
-
-// FindShutter returns a Shutter object belnging to selected clu
-func (gs *GrentonSet) FindShutter(fClu, fShutter string) (found *Shutter, err error) {
-	gs.Debugf("GrentonSet FindShutter: Looking for shutter: in %s id: %s\n", fShutter, fClu)
-	for _, clu := range gs.Clus {
-		if clu.GetMixedId() == fClu {
-			for _, sht := range clu.Shutters {
-				if sht.GetMixedId() == fShutter && sht != nil {
-					found = sht
-					err = nil
-					return
-				}
-			}
-		}
-	}
-	err = fmt.Errorf("Shutter not found [clu: %s id: %s]", fShutter, fClu)
-	return
-}
-
-// FindMotionSensor returns a MotionSensor object from selected clu and with provided id
-func (gs *GrentonSet) FindMotionSensor(fClu, fSensor string) (*MotionSensor, error) {
-	gs.Debugf("GrentonSet FindMotionSensor: Looking for sensor in clu %s with id %s\n", fClu, fSensor)
-	for _, clu := range gs.Clus {
-		if strings.EqualFold(clu.GetMixedId(), fClu) {
-			for _, sens := range clu.MotionSensors {
-				if strings.EqualFold(sens.GetMixedId(), fSensor) && sens != nil {
-					return sens, nil
-				}
-			}
-		}
-	}
-	return nil, fmt.Errorf("sensor not found [clu: %s id: %s]", fClu, fSensor)
 }
 
 // TestAllGrentonGate iterates every object and checks individually if request is success http code
