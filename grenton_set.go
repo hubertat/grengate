@@ -220,6 +220,10 @@ func (gs *GrentonSet) readCompleted(e *laneEntry, r *laneResult) {
 		r.Apply, r.Err = ApplyInvalid, fmt.Errorf("no device %s|%s configured", obj.Clu, obj.Id)
 		return
 	}
+	if r.Item == nil { // the item could not be decoded (r.Err)
+		r.Apply = ApplyInvalid
+		return
+	}
 	sentGen, _ := e.Meta.(uint64)
 	r.Apply, r.Err = d.applyRead(*r.Item, sentGen, r.Stamp)
 	switch r.Apply {

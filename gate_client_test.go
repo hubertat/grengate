@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,4 +167,45 @@ func TestGateClient_ReadFailuresAndMissingItems(t *testing.T) {
 			t.Errorf("omitted device: %v, want missing", r.Outcome)
 		}
 	})
+}
+
+// One badly typed item fails only its own device; an item whose identity cannot be decoded
+// is skipped and logged. The rest of the response is used.
+func TestGateClient_ReadBadItemFailsOnlyItsDevice(t *testing.T) {
+	logs := captureLog(t)
+	g := newFakeGate(t)
+	l := newTestLane(t, g, readLane, func(c *laneConfig) {
+		c.logf = log.Printf
+	})
+	g.RespondNext(fakeReadPath, `[{"Clu":"`+tCLU+`","Id":"DOU0001","Kind":"Light","Light":{"State":1}},
+		{"Clu":"`+tCLU+`","Id":"DOU0002","Kind":"Light","Light":{"State":true}},
+		5, {"Clu":7,"Id":"DOU0003"}]`)
+	res := l.Submit(lightRead("DOU0001"), lightRead("DOU0002"), lightRead("DOU0003"))
+
+	r1, r2, r3 := waitResult(t, res[0]), waitResult(t, res[1]), waitResult(t, res[2])
+	if r1.Outcome != OutcomeOK || r1.Item != nil || r1.Err == nil {
+		t.Errorf("bad item: %+v, want ok without an item, with the decoding error", r1)
+	}
+	if r2.Outcome != OutcomeOK || r2.Item == nil || r2.Item.Light == nil || *r2.Item.Light.State != true {
+		t.Errorf("good item: %+v", r2)
+	}
+	if r3.Outcome != OutcomeMissing {
+		t.Errorf("device of the undecodable item: %v, want missing", r3.Outcome)
+	}
+	if n := strings.Count(logs.String(), "read response item"); n != 2 {
+		t.Errorf("undecodable items logged %d times, want 2:\n%s", n, logs.String())
+	}
+}
+
+func TestRefresh_BadItemMakesOnlyItsDeviceInvalid(t *testing.T) {
+	clu := lightsClu(2)
+	gs, g := newTestSet(t, clu)
+	g.RespondNext(fakeReadPath, `[{"Clu":"`+tCLU+`","Id":"DOU0001","Kind":"Light","Light":{"State":1}},{"Clu":"`+tCLU+`","Id":"DOU0002","Kind":"Light","Light":{"State":true}}]`)
+	c := gs.Refresh()
+	if c.Applied != 1 || c.Missing != 1 || c.Failed != 0 {
+		t.Errorf("refresh = %+v, want 1 applied, 1 invalid", c)
+	}
+	if clu.Lights[0].isReady() || !clu.Lights[1].isReady() {
+		t.Error("want only the light with the good item ready")
+	}
 }

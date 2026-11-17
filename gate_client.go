@@ -58,30 +58,47 @@ func entryKey(clu, id string) string {
 
 // decodeReadResponse matches the items of a read response (a JSON array, as read-script.lua
 // answers) to the entries of the request by Clu + Id. An entry without an item is missing.
-// A body that is not an array of objects fails the whole request.
-func decodeReadResponse(entries []*laneEntry, body []byte) ([]laneResult, error) {
-	var items []ReqObject
-	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, fmt.Errorf("unreadable read response: %w", err)
+// Items are decoded one by one: an item whose payload cannot be decoded (a field of the
+// wrong type) gives its entry OutcomeOK with no Item and the decoding error, which the
+// device treats as an invalid result; an item without a decodable identity cannot be
+// matched and is returned in skipped. Only a body that is not an array fails the request.
+func decodeReadResponse(entries []*laneEntry, body []byte) (out []laneResult, skipped []error, err error) {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, nil, fmt.Errorf("unreadable read response: %w", err)
 	}
-	byKey := make(map[string]int, len(items))
-	for i, it := range items {
-		k := entryKey(it.Clu, it.Id)
-		if _, dup := byKey[k]; !dup {
-			byKey[k] = i
+	type decoded struct {
+		item *ReqObject
+		err  error
+	}
+	byKey := make(map[string]decoded, len(raw))
+	for i, r := range raw {
+		var id struct{ Clu, Id string }
+		if err := json.Unmarshal(r, &id); err != nil || id.Clu == "" || id.Id == "" {
+			skipped = append(skipped, fmt.Errorf("read response item %d has no usable Clu and Id: %s", i, r))
+			continue
 		}
+		k := entryKey(id.Clu, id.Id)
+		if _, dup := byKey[k]; dup {
+			continue
+		}
+		var item ReqObject
+		if err := json.Unmarshal(r, &item); err != nil {
+			byKey[k] = decoded{err: fmt.Errorf("undecodable read item %s|%s: %w", id.Clu, id.Id, err)}
+			continue
+		}
+		byKey[k] = decoded{item: &item}
 	}
-	out := make([]laneResult, len(entries))
+	out = make([]laneResult, len(entries))
 	for i, e := range entries {
-		idx, ok := byKey[e.key]
+		d, ok := byKey[e.key]
 		if !ok {
 			out[i] = laneResult{Outcome: OutcomeMissing, Err: fmt.Errorf("%s|%s not in read response", e.obj.Clu, e.obj.Id)}
 			continue
 		}
-		item := items[idx]
-		out[i] = laneResult{Outcome: OutcomeOK, Item: &item}
+		out[i] = laneResult{Outcome: OutcomeOK, Item: d.item, Err: d.err}
 	}
-	return out, nil
+	return out, skipped, nil
 }
 
 // writeAck is one acknowledgement item of a write response. The old update-script.lua

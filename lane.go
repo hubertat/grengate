@@ -92,7 +92,8 @@ type laneResult struct {
 	Outcome Outcome
 	// Apply is set for reads with OutcomeOK by the completion hook.
 	Apply ApplyOutcome
-	// Item is the read item from the response (reads with OutcomeOK only).
+	// Item is the read item from the response (reads with OutcomeOK only; nil when the
+	// item could not be decoded, with the reason in Err).
 	Item *ReqObject
 	Err  error
 	// Stamp orders evidence across both lanes: taken from one counter when the response
@@ -433,7 +434,11 @@ func (l *lane) send(batch []*laneEntry) {
 		if l.cfg.kind == writeLane {
 			results, err = decodeWriteResponse(batch, resp)
 		} else {
-			results, err = decodeReadResponse(batch, resp)
+			var skipped []error
+			results, skipped, err = decodeReadResponse(batch, resp)
+			for _, s := range skipped {
+				l.cfg.logf("%s lane: %v", l.cfg.kind, s)
+			}
 		}
 		if err == nil {
 			l.complete(batch, results, sent, len(body), overlapped, nil, true)
