@@ -385,32 +385,34 @@ func TestShutter_RetargetBeforeSendIsOneCommand(t *testing.T) {
 	settle(t, gs)
 	assertCmds(t, g, "MOVEDOWN")
 	tick(t, gs, 40)
-	assertShown(t, sh, shown{60, 60, hkDecreasing})
-	if timersOf(gs).running() {
-		t.Error("clock still running at the target")
-	}
+	settle(t, gs)
+	assertShown(t, sh, shown{60, 60, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP")
 }
 
 // Retarget while moving: the new command (other direction) is submitted under the new
-// generation; the motor is believed moving the old way until its acknowledgement, which
-// switches the belief.
-func TestShutter_RetargetWhileMovingSwitchesBeliefOnAck(t *testing.T) {
+// generation. Until its acknowledgement the motor is believed moving the old way, and the old
+// generation's target is passed without a STOP; the acknowledgement switches the belief and
+// the new generation stops at its own target.
+func TestShutter_RetargetWhileMovingPassesOldTargetWithoutStop(t *testing.T) {
 	checkGoroutines(t)
 	gs, g, sh, _ := readyShutter(t)
-	hkTarget(t, sh, 40)
+	hkTarget(t, sh, 80)
 	settle(t, gs)
-	tick(t, gs, 20)
+	tick(t, gs, 10)
 	h := g.HoldNext(fakeSetPath)
-	hkTarget(t, sh, 90)
+	hkTarget(t, sh, 95)
 	h.Wait(t)
-	tick(t, gs, 5) // still believed moving down
-	assertShown(t, sh, shown{75, 90, hkDecreasing})
+	tick(t, gs, 15) // still believed moving down, past 80
+	assertShown(t, sh, shown{75, 95, hkDecreasing})
+	assertCmds(t, g, "MOVEDOWN", "MOVEUP")
 	h.Release()
 	settle(t, gs)
-	assertShown(t, sh, shown{75, 90, hkIncreasing})
-	tick(t, gs, 15)
-	assertShown(t, sh, shown{90, 90, hkIncreasing})
-	assertCmds(t, g, "MOVEDOWN", "MOVEUP")
+	assertShown(t, sh, shown{75, 95, hkIncreasing})
+	tick(t, gs, 20)
+	settle(t, gs)
+	assertShown(t, sh, shown{95, 95, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "MOVEUP", "STOP")
 }
 
 // A new target in the direction the motor already moves needs no command: the movement
@@ -423,9 +425,10 @@ func TestShutter_RetargetSameDirectionTakesOverMovement(t *testing.T) {
 	tick(t, gs, 20)
 	hkTarget(t, sh, 20)
 	settle(t, gs)
-	tick(t, gs, 60)
-	assertShown(t, sh, shown{20, 20, hkDecreasing})
-	assertCmds(t, g, "MOVEDOWN")
+	tick(t, gs, 60) // past 40
+	settle(t, gs)
+	assertShown(t, sh, shown{20, 20, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP")
 }
 
 // An older generation's acknowledgement updates the belief: MOVEUP is in flight, the user
@@ -434,7 +437,7 @@ func TestShutter_RetargetSameDirectionTakesOverMovement(t *testing.T) {
 func TestShutter_OlderGenerationAckUpdatesBelief(t *testing.T) {
 	checkGoroutines(t)
 	gs, g, sh, clk := readyShutter(t)
-	moveTo(t, gs, g, sh, 50)
+	moveTo(t, gs, sh, 50)
 	hm := g.HoldNext(fakeSetPath)
 	hkTarget(t, sh, 80)
 	hm.Wait(t)
@@ -444,20 +447,22 @@ func TestShutter_OlderGenerationAckUpdatesBelief(t *testing.T) {
 	hm.Release()
 	hs.Wait(t) // MOVEUP acknowledged, STOP in flight
 	eventually(t, 2*time.Second, func() bool { return clk.running() }, "the clock to start")
-	tick(t, gs, 5)
-	assertShown(t, sh, shown{55, 50, hkIncreasing})
+	tick(t, gs, 35) // past MOVEUP's target 80: that generation no longer issues a STOP
+	assertShown(t, sh, shown{85, 50, hkIncreasing})
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEUP", "STOP")
 	hs.Release()
 	settle(t, gs)
-	assertShown(t, sh, shown{55, 55, hkStopped})
+	assertShown(t, sh, shown{85, 85, hkStopped})
 	if clk.running() {
 		t.Error("clock still running after the STOP was acknowledged")
 	}
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEUP", "STOP")
 
 	// A wall switch then moves it up again: that movement is not MOVEUP's any more.
 	g.SetShutter(tCLU, tSID, 20000, 1)
 	gs.Refresh()
 	settle(t, gs)
-	assertShown(t, sh, shown{55, 55, hkIncreasing})
+	assertShown(t, sh, shown{85, 85, hkIncreasing})
 	if clk.running() {
 		t.Error("clock runs for a movement grengate did not start")
 	}
@@ -529,16 +534,14 @@ func TestShutter_WallSwitchMovementKeepsPosition(t *testing.T) {
 	assertCmds(t, g)
 }
 
-// moveTo moves the shutter to target: the move is acknowledged and the clock runs to the
-// target, where a read shows the motor stopped.
-func moveTo(t *testing.T, gs *GrentonSet, g *fakeGate, sh *Shutter, target int) {
+// moveTo moves the shutter to a target that is not an end stop: the move is acknowledged,
+// the clock runs to the target and the STOP there is acknowledged.
+func moveTo(t *testing.T, gs *GrentonSet, sh *Shutter, target int) {
 	t.Helper()
 	from := shownBy(sh).current
 	hkTarget(t, sh, target)
 	settle(t, gs)
 	tick(t, gs, max(target-from, from-target))
-	g.SetShutter(tCLU, tSID, 20000, 0)
-	gs.Refresh()
 	settle(t, gs)
 	assertShown(t, sh, shown{target, target, hkStopped})
 }
@@ -569,4 +572,83 @@ func TestShutter_LateAckClaimsObservedMovement(t *testing.T) {
 	settle(t, gs)
 	tick(t, gs, 10)
 	assertShown(t, sh, shown{90, 40, hkDecreasing})
+}
+
+// Automatic STOP at the target: submitted by the latest generation once the clock reaches
+// the target; its acknowledgement stops the motor and the simulation.
+func TestShutter_StopAtTarget(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 59)
+	assertCmds(t, g, "MOVEDOWN")
+	h := g.HoldNext(fakeSetPath)
+	tick(t, gs, 1)
+	h.Wait(t)
+	if clk.running() {
+		t.Error("clock still running at the target")
+	}
+	assertShown(t, sh, shown{40, 40, hkDecreasing})
+	h.Release()
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP")
+}
+
+// A target at an end stop is held for a full travel time before the STOP (as the loop-based
+// simulation did), so the motor surely reaches the end stop whatever the simulation's error.
+func TestShutter_EndStopTargetRunsFullTravel(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	moveTo(t, gs, sh, 50)
+	hkTarget(t, sh, 0)
+	settle(t, gs)
+	tick(t, gs, 99)
+	settle(t, gs)
+	assertShown(t, sh, shown{0, 0, hkDecreasing})
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN")
+	tick(t, gs, 1)
+	settle(t, gs)
+	assertShown(t, sh, shown{0, 0, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "STOP")
+}
+
+// A late acknowledgement of the automatic STOP still records that the STOP ran: the confirm
+// read (the CLU applies the STOP with a delay) shows the motor still moving and is processed
+// first, so the belief stays "moving down", but no second STOP is sent. The next poll shows
+// the motor stopped and ends the simulation.
+func TestShutter_LateStopAckIsNotRepeated(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 59)
+	release := make(chan struct{})
+	sh.sim.resultHook = func(c *shutterCommand, _ laneResult) {
+		if c.cmd == "STOP" {
+			<-release
+		}
+	}
+	h := g.HoldNext(fakeSetPath)
+	tick(t, gs, 1)
+	h.Wait(t)
+	g.SetShutter(tCLU, tSID, 20000, 2)
+	h.Release()
+	eventually(t, 2*time.Second, func() bool {
+		return gs.writer.idle() && gs.reader.idle() && sh.sim.inboxHandled() && g.RequestCount(fakeReadPath) == 3
+	}, "the confirm read to be handled")
+	close(release)
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkDecreasing})
+	if clk.running() {
+		t.Error("clock running at the target")
+	}
+	assertCmds(t, g, "MOVEDOWN", "STOP")
+
+	g.SetShutter(tCLU, tSID, 20000, 0)
+	gs.Refresh()
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP")
 }

@@ -143,6 +143,10 @@ type observation struct {
 type generation struct {
 	n      uint64 // 0: no target yet
 	target int
+	// travel counts the clock steps of this generation's own movement.
+	travel int
+	// stopSent: its automatic STOP was submitted.
+	stopSent bool
 }
 
 // shutterSim is the simulation of one shutter.
@@ -345,6 +349,7 @@ func (s *shutterSim) handle(ev simEvent) {
 		s.handleTick(ev.run)
 	}
 	s.checkEnd()
+	s.checkAutoStop()
 	s.updateClock()
 	s.publish()
 }
@@ -440,9 +445,16 @@ func (s *shutterSim) setBelief(m motorState, stamp uint64) {
 	s.moveGen = 0
 }
 
-// claim makes the believed movement generation n's.
+// claim makes the believed movement generation n's. For the latest generation its travel
+// starts now.
 func (s *shutterSim) claim(n uint64) {
+	if s.moveGen == n {
+		return
+	}
 	s.moveGen = n
+	if n == s.gen.n {
+		s.gen.travel = 0
+	}
 }
 
 // checkEnd ends the simulation once the motor is believed stopped and the latest
@@ -453,6 +465,37 @@ func (s *shutterSim) checkEnd() {
 		return
 	}
 	s.setTarget(s.pos)
+}
+
+// checkAutoStop submits the STOP at the target. Only the latest generation does, and only
+// for its own movement, which an acknowledgement (or a movement it took over) started: the
+// STOP can never replace its own unsent move. A target at an end stop gets a full travel
+// time first, as the loop-based simulation did, so the motor surely reaches the end stop
+// whatever the error of the simulated position.
+func (s *shutterSim) checkAutoStop() {
+	g := &s.gen
+	if g.n == 0 || s.moveGen != g.n || g.stopSent || s.latestBusy() || !s.atTarget() || s.travelLeft() {
+		return
+	}
+	g.stopSent = true
+	s.submit(&shutterCommand{cmd: cmdStop, gen: g.n})
+}
+
+// atTarget reports whether the believed movement reached (or passed) the latest target.
+func (s *shutterSim) atTarget() bool {
+	switch s.belief {
+	case motorUp:
+		return s.pos >= s.gen.target
+	case motorDown:
+		return s.pos <= s.gen.target
+	}
+	return false
+}
+
+// travelLeft reports whether the latest generation's movement to an end stop has not run a
+// full travel time yet.
+func (s *shutterSim) travelLeft() bool {
+	return (s.gen.target == 0 || s.gen.target == 100) && s.gen.travel < 100
 }
 
 // latestBusy reports whether the latest generation waits for the result of a command.
@@ -502,15 +545,22 @@ func (s *shutterSim) handleTick(run uint64) {
 		return // cancelled after it fired
 	}
 	s.clockStop = nil // a step fires once; updateClock schedules the next
+	if s.gen.n != 0 && s.moveGen == s.gen.n {
+		s.gen.travel++
+	}
 	if next, ok := s.nextPos(); ok {
 		s.pos = next
 	}
 }
 
-// clockNeeded reports whether the clock has something to do.
+// clockNeeded reports whether the clock has something to do: move the position, or count
+// the latest generation's travel to an end stop.
 func (s *shutterSim) clockNeeded() bool {
-	_, ok := s.nextPos()
-	return ok
+	if _, ok := s.nextPos(); ok {
+		return true
+	}
+	g := s.gen
+	return g.n != 0 && s.moveGen == g.n && !g.stopSent && s.travelLeft()
 }
 
 // updateClock starts or stops the clock as needed. One step is MaxTime/100.
