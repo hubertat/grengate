@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -38,18 +37,13 @@ func (gs *GrentonSet) Refresh() refreshCounts {
 	chans := gs.reader.Submit(objs...)
 
 	c := refreshCounts{Objects: len(devs)}
-	var problems []string
-	for i, ch := range chans {
+	for _, ch := range chans {
 		r := <-ch
 		switch {
 		case r.Outcome == OutcomeFailed:
 			c.Failed++
-		case r.Outcome == OutcomeMissing:
+		case r.Outcome == OutcomeMissing, r.Apply == ApplyInvalid: // logged per device by readCompleted
 			c.Missing++
-			problems = append(problems, describeDevice(devs[i])+": missing from response")
-		case r.Apply == ApplyInvalid:
-			c.Missing++
-			problems = append(problems, fmt.Sprintf("%s: invalid: %v", describeDevice(devs[i]), r.Err))
 		case r.Apply == ApplyDiscarded:
 			c.Discarded++
 		default:
@@ -65,9 +59,6 @@ func (gs *GrentonSet) Refresh() refreshCounts {
 	summary := fmt.Sprintf("refresh: %d devices in %d ms: %d applied (%d changed), %d discarded, %d missing or invalid, %d failed",
 		c.Objects, c.Duration.Milliseconds(), c.Applied, c.Changed, c.Discarded, c.Missing, c.Failed)
 	if c.Missing > 0 || c.Failed > 0 {
-		if len(problems) > 0 {
-			summary += "; " + strings.Join(problems, "; ")
-		}
 		gs.Logf("%s", summary)
 	} else {
 		gs.Debugf("%s", summary)

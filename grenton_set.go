@@ -210,27 +210,37 @@ func (gs *GrentonSet) readSent(entries []*laneEntry) {
 // HomeKit sync is queued for an applied result. The sync is queued after every applied
 // read, changed or not, so HomeKit values the user changed without effect (a failed write)
 // return to the device state.
+//
+// Every read goes through here, whoever submitted it (refresh, autotest, confirm read, read
+// after a refused write), so a missing or invalid result is logged here, once per read.
 func (gs *GrentonSet) readCompleted(e *laneEntry, r *laneResult) {
-	if r.Outcome != OutcomeOK {
-		return
-	}
 	obj := e.Obj()
 	d, ok := gs.registry.find(obj.Clu, obj.Id)
 	if !ok {
-		r.Apply, r.Err = ApplyInvalid, fmt.Errorf("no device %s|%s configured", obj.Clu, obj.Id)
+		if r.Outcome == OutcomeOK {
+			r.Apply, r.Err = ApplyInvalid, fmt.Errorf("no device %s|%s configured", obj.Clu, obj.Id)
+		}
 		return
 	}
-	if r.Item == nil { // the item could not be decoded (r.Err)
+	switch {
+	case r.Outcome == OutcomeMissing:
+		gs.Logf("read %s: missing from read response", describeDevice(d))
+		return
+	case r.Outcome != OutcomeOK: // the request failed; the lane logged it
+		return
+	case r.Item == nil: // the item could not be decoded (r.Err)
 		r.Apply = ApplyInvalid
-		return
+	default:
+		sentGen, _ := e.Meta.(uint64)
+		r.Apply, r.Err = d.applyRead(*r.Item, sentGen, r.Stamp)
 	}
-	sentGen, _ := e.Meta.(uint64)
-	r.Apply, r.Err = d.applyRead(*r.Item, sentGen, r.Stamp)
 	switch r.Apply {
 	case ApplyChanged, ApplyUnchanged:
 		gs.hkSync.mark(d)
+	case ApplyInvalid:
+		gs.Logf("read %s: invalid result, not applied: %v", describeDevice(d), r.Err)
 	case ApplyDiscarded:
-		gs.Debugf("read %s|%s: discarded by the ordering rules", obj.Clu, obj.Id)
+		gs.Debugf("read %s: discarded by the ordering rules", describeDevice(d))
 	}
 }
 

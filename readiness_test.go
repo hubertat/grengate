@@ -211,3 +211,31 @@ func TestReadiness_AccessoryListingKeepsValuesOfUnreadDevice(t *testing.T) {
 		}
 	}
 }
+
+// Invalid and missing results of reads outside a refresh (confirm reads, reads queued by a
+// refused write) are logged too (concept 3.5).
+func TestReadiness_InvalidOrMissingConfirmAndRefusalReadsAreLogged(t *testing.T) {
+	logs := captureLog(t)
+	clu := allKindsClu()
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
+
+	// The confirm read of a light write comes back without the payload.
+	g.RespondNext(fakeReadPath, `[{"Clu":"CLU_012abcde","Id":"DOU0001","Kind":"Light"}]`)
+	hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
+	settle(t, gs)
+	if !strings.Contains(logs.String(), `"lamp" (CLU_012abcde|DOU0001): invalid`) {
+		t.Errorf("invalid confirm read not logged:\n%s", logs.String())
+	}
+
+	// The read queued by a refused thermostat write finds no item.
+	clu2 := allKindsClu()
+	gs2, g2 := newTestSet(t, clu2)
+	g2.Omit(tCLU, "THE0002")
+	hkWrite(clu2.Therms[0].hk.Thermostat.TargetTemperature.C, 25.0)
+	settle(t, gs2)
+	if !strings.Contains(logs.String(), `"thermo" (CLU_012abcde|THE0002): missing from read response`) {
+		t.Errorf("missing refusal read not logged:\n%s", logs.String())
+	}
+}

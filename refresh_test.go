@@ -118,6 +118,11 @@ func TestRefresh_CompletesWithFailedRequestsAndMissingDevices(t *testing.T) {
 			t.Errorf("log lacks %q:\n%s", s, out)
 		}
 	}
+	for _, s := range []string{"light3", "light4"} {
+		if n := strings.Count(out, s); n != 1 {
+			t.Errorf("%q logged %d times, want once:\n%s", s, n, out)
+		}
+	}
 }
 
 func TestRefresh_CompletesWhenEveryRequestTimesOut(t *testing.T) {
