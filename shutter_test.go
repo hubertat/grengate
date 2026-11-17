@@ -781,3 +781,248 @@ func TestShutter_FailedStopAfterOlderMoveAckLeavesMotorMovingUp(t *testing.T) {
 	}
 	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEUP", "STOP", "STOP")
 }
+
+// uncertainMove submits a move to 40 whose outcome is uncertain: ran says whether the fake
+// GATE executed it (answered 500 after processing) or not (answered 500 without processing).
+func uncertainMove(t *testing.T, g *fakeGate, sh *Shutter, ran bool) {
+	t.Helper()
+	if !ran {
+		g.FailNext(fakeSetPath, 500, 1)
+		hkTarget(t, sh, 40)
+		return
+	}
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 40)
+	h.Wait(t)
+	h.ReleaseWithStatus(500)
+}
+
+// Reconciliation table, row "move, read shows moving in its direction": it ran; the clock
+// runs towards the target from now. Not retried.
+func TestShutter_UncertainMoveReadSameDirection(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	uncertainMove(t, g, sh, true)
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 40, hkDecreasing})
+	tick(t, gs, 60)
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP")
+}
+
+// Reconciliation table, row "move, read shows moving the other way": it did not run; the
+// belief follows the read, the move is retried once, and its acknowledgement switches the
+// belief.
+func TestShutter_UncertainMoveReadOtherDirectionRetried(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	g.SetShutter(tCLU, tSID, 20000, 1) // a wall switch moves it up meanwhile
+	uncertainMove(t, g, sh, false)
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "MOVEDOWN")
+	assertShown(t, sh, shown{100, 40, hkDecreasing})
+}
+
+// The retry of a move that did not run (uncertain, read shows the other direction) does not
+// run either: given up, the target becomes the end stop of the observed direction.
+func TestShutter_UncertainMoveReadOtherDirectionGivenUp(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	g.SetShutter(tCLU, tSID, 20000, 1)
+	g.FailNext(fakeSetPath, 500, 2)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "MOVEDOWN")
+	assertShown(t, sh, shown{100, 100, hkIncreasing})
+	if clk.running() {
+		t.Error("clock runs for a movement grengate did not start")
+	}
+}
+
+// Reconciliation table, row "move, read shows stopped": ambiguous. The simulation ends with
+// the target set to the position; not retried.
+func TestShutter_UncertainMoveReadStopped(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	uncertainMove(t, g, sh, false)
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 100, hkStopped})
+	assertCmds(t, g, "MOVEDOWN")
+	if clk.running() {
+		t.Error("clock running")
+	}
+}
+
+// Reconciliation table, row "any, the read fails as well": it stays uncertain, nothing is
+// retried and the clock does not start; the next poll decides (here: the move ran).
+func TestShutter_UncertainMoveReadFails(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		spoil func(g *fakeGate)
+		after func(g *fakeGate)
+	}{
+		{"read request fails", func(g *fakeGate) { g.FailNext(fakeReadPath, 500, 1) }, func(*fakeGate) {}},
+		{"shutter missing from the read", func(g *fakeGate) { g.Omit(tCLU, tSID) }, func(g *fakeGate) { g.Unomit(tCLU, tSID) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkGoroutines(t)
+			gs, g, sh, clk := readyShutter(t)
+			tc.spoil(g)
+			uncertainMove(t, g, sh, true)
+			settle(t, gs)
+			assertShown(t, sh, shown{100, 40, hkStopped})
+			if clk.running() {
+				t.Error("clock started without evidence")
+			}
+			assertCmds(t, g, "MOVEDOWN")
+
+			tc.after(g)
+			gs.Refresh()
+			settle(t, gs)
+			assertShown(t, sh, shown{100, 40, hkDecreasing})
+			tick(t, gs, 60)
+			settle(t, gs)
+			assertShown(t, sh, shown{40, 40, hkStopped})
+			assertCmds(t, g, "MOVEDOWN", "STOP")
+		})
+	}
+}
+
+// An uncertain result handled after a newer observation is reconciled with that observation
+// at once instead of waiting for the next poll.
+func TestShutter_UncertainResultAfterNewerObservationReconcilesAtOnce(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	release := make(chan struct{})
+	sh.sim.resultHook = func(c *shutterCommand, _ laneResult) {
+		if c.cmd == "MOVEDOWN" {
+			<-release
+		}
+	}
+	uncertainMove(t, g, sh, true)
+	eventually(t, 2*time.Second, func() bool {
+		return gs.writer.idle() && gs.reader.idle() && sh.sim.inboxHandled() && g.RequestCount(fakeReadPath) == 2
+	}, "the confirm read to be handled")
+	close(release)
+	settle(t, gs)
+	tick(t, gs, 60)
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP")
+}
+
+// Reconciliation table, row "STOP, read shows stopped": the simulation ends with the target
+// set to the position.
+func TestShutter_UncertainStopReadStopped(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 59)
+	h := g.HoldNext(fakeSetPath)
+	tick(t, gs, 1)
+	h.Wait(t)
+	h.ReleaseWithStatus(500)
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP")
+}
+
+// Reconciliation table, row "STOP, read shows still moving": it did not run. The observed
+// movement is kept and the STOP is retried once under the same generation; here the retry
+// runs.
+func TestShutter_UncertainStopReadStillMovingRetried(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 59)
+	hr := g.HoldNext(fakeReadPath)
+	g.FailNext(fakeSetPath, 500, 1)
+	tick(t, gs, 1)
+	hr.Wait(t) // the confirm read saw the motor still moving down
+	assertShown(t, sh, shown{40, 40, hkDecreasing})
+	hr.Release()
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP", "STOP")
+}
+
+// The retry of a STOP that did not run (uncertain, read shows still moving, either
+// direction) does not run either: given up, the target becomes the end stop of the observed
+// direction.
+func TestShutter_UncertainStopReadStillMovingGivenUp(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		state      int // what the reads show
+		want       shown
+		clockAfter bool // the clock runs on: the observed movement is the generation's own
+	}{
+		{"same direction", 2, shown{40, 0, hkDecreasing}, true},
+		{"other direction", 1, shown{40, 100, hkIncreasing}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkGoroutines(t)
+			gs, g, sh, clk := readyShutter(t)
+			hkTarget(t, sh, 40)
+			settle(t, gs)
+			tick(t, gs, 59)
+			g.SetShutter(tCLU, tSID, 20000, tc.state)
+			g.FailNext(fakeSetPath, 500, 2)
+			tick(t, gs, 1)
+			settle(t, gs)
+			assertCmds(t, g, "MOVEDOWN", "STOP", "STOP")
+			assertShown(t, sh, tc.want)
+			if clk.running() != tc.clockAfter {
+				t.Errorf("clock running = %v, want %v", clk.running(), tc.clockAfter)
+			}
+		})
+	}
+}
+
+// Failure table, row "uncertain outcome": the belief is unchanged and the clock carries on
+// until the confirm read decides. Here a retarget's MOVEUP is uncertain while the motor is
+// believed moving down: the clock keeps moving down; the read shows it still moving down,
+// so MOVEUP did not run and is retried.
+func TestShutter_UncertainRetargetClockCarriesOn(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 10)
+	hr := g.HoldNext(fakeReadPath)
+	g.FailNext(fakeSetPath, 500, 1)
+	hkTarget(t, sh, 95)
+	hr.Wait(t)
+	eventually(t, 2*time.Second, sh.sim.idle, "the uncertain result to be handled")
+	tick(t, gs, 5)
+	assertShown(t, sh, shown{85, 95, hkDecreasing})
+	hr.Release()
+	settle(t, gs)
+	assertShown(t, sh, shown{85, 95, hkIncreasing})
+	assertCmds(t, g, "MOVEDOWN", "MOVEUP", "MOVEUP")
+}
+
+// Failure table, row "uncertain outcome, older generation": nothing happens for it; the
+// newer generation's command decides. MOVEDOWN is in flight when the user retargets up; it
+// ends uncertain, MOVEUP is acknowledged and the reads show the motor moving up: MOVEDOWN is
+// not reconciled against them, so it is not retried as "did not run".
+func TestShutter_UncertainOlderGenerationDoesNothing(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	moveTo(t, gs, sh, 50)
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 20)
+	h.Wait(t)
+	hkTarget(t, sh, 80)
+	eventually(t, 2*time.Second, sh.sim.inboxHandled, "the simulation to handle the target")
+	h.ReleaseWithStatus(500)
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "MOVEUP")
+	assertShown(t, sh, shown{50, 80, hkIncreasing})
+	tick(t, gs, 30)
+	settle(t, gs)
+	assertShown(t, sh, shown{80, 80, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "MOVEUP", "STOP")
+}

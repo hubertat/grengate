@@ -151,6 +151,8 @@ type generation struct {
 	stopSent bool
 	// gaveUp: a command of it did not run, nor did its retry. It submits nothing more.
 	gaveUp bool
+	// uncertain is its command whose outcome was uncertain, until a read decides.
+	uncertain *shutterCommand
 }
 
 // shutterSim is the simulation of one shutter.
@@ -405,11 +407,12 @@ func (s *shutterSim) submit(c *shutterCommand) {
 }
 
 // handleResult takes the result of a command. Only an acknowledgement is evidence; a
-// per-item error means the command did not run, which matters for the latest generation
-// only (concept 3.4, failure table).
+// per-item error means the command did not run, an uncertain outcome is decided by the next
+// read. Both matter for the latest generation only (concept 3.4, failure table).
 func (s *shutterSim) handleResult(c *shutterCommand, r laneResult) {
 	s.cmds = slices.DeleteFunc(s.cmds, func(x *shutterCommand) bool { return x == c })
 	latest := c.gen == s.gen.n && !s.gen.gaveUp
+	c.stamp = r.Stamp
 	switch r.Outcome {
 	case OutcomeOK:
 	case OutcomeError:
@@ -417,10 +420,17 @@ func (s *shutterSim) handleResult(c *shutterCommand, r laneResult) {
 			s.didNotRun(c)
 		}
 		return
+	case OutcomeUncertain:
+		if latest {
+			s.gen.uncertain = c
+			if s.lastObs.stamp > c.stamp { // a read after it was handled first
+				s.reconcile(s.lastObs.state)
+			}
+		}
+		return
 	default: // superseded: replaced in the mailbox by a newer command, evidence of nothing
 		return
 	}
-	c.stamp = r.Stamp
 	m := c.motor()
 	if c.stamp > s.beliefStamp {
 		s.setBelief(m, c.stamp)
@@ -444,6 +454,33 @@ func (s *shutterSim) handleObserved(m motorState, stamp uint64) {
 	}
 	if stamp > s.beliefStamp {
 		s.setBelief(m, stamp)
+	}
+	if u := s.gen.uncertain; u != nil && stamp > u.stamp {
+		s.reconcile(m)
+	}
+}
+
+// reconcile decides, from what a read completed after it shows (seen; the read already set
+// the belief), whether the latest generation's command with an uncertain outcome ran
+// (concept 3.4, reconciliation table).
+func (s *shutterSim) reconcile(seen motorState) {
+	u := s.gen.uncertain
+	s.gen.uncertain = nil
+	switch {
+	case u.cmd == cmdStop && seen == motorStopped:
+		// The motor stopped: the simulation ends (checkEnd).
+	case u.cmd == cmdStop:
+		s.didNotRun(u) // still moving, either direction: the observed movement is kept
+	case seen == u.motor():
+		// It ran: the clock runs towards the target from now.
+		if s.belief == seen {
+			s.claim(u.gen)
+		}
+	case seen == motorStopped:
+		// Ambiguous: it did not run, or it ran and the movement already ended. Not retried;
+		// the simulation ends (checkEnd).
+	default:
+		s.didNotRun(u) // moving the other way
 	}
 }
 
@@ -531,9 +568,10 @@ func (s *shutterSim) travelLeft() bool {
 	return (s.gen.target == 0 || s.gen.target == 100) && s.gen.travel < 100
 }
 
-// latestBusy reports whether the latest generation waits for the result of a command.
+// latestBusy reports whether the latest generation waits for the result of a command, or
+// for a read to decide an uncertain one.
 func (s *shutterSim) latestBusy() bool {
-	return slices.ContainsFunc(s.cmds, func(c *shutterCommand) bool { return c.gen == s.gen.n })
+	return s.gen.uncertain != nil || slices.ContainsFunc(s.cmds, func(c *shutterCommand) bool { return c.gen == s.gen.n })
 }
 
 // setTarget changes the latest generation's target, and what HomeKit shows as the target
