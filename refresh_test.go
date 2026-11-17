@@ -73,7 +73,7 @@ func TestRefresh_AppliesStateToHomeKit(t *testing.T) {
 	if c.Applied != 4 || c.Changed != 4 {
 		t.Errorf("first refresh %+v, want 4 applied, 4 changed", c)
 	}
-	// Refresh returns once HomeKit shows the applied state.
+	syncHomeKit(t, gs)
 	if v := findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn).Val; v != true {
 		t.Errorf("light On = %v", v)
 	}

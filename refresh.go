@@ -22,7 +22,9 @@ type refreshCounts struct {
 
 // Refresh reads every device through the read lane and waits until each one has an
 // outcome. Every request is bounded by the request timeout, so a refresh always completes.
-// Only one refresh runs at a time. HomeKit shows the applied state when Refresh returns.
+// Only one refresh runs at a time. Applied state reaches HomeKit through the syncer, which
+// Refresh does not wait for: a stalled HomeKit connection can block hap's SetValue
+// indefinitely, and polling must go on regardless.
 func (gs *GrentonSet) Refresh() refreshCounts {
 	gs.refreshMu.Lock()
 	defer gs.refreshMu.Unlock()
@@ -57,7 +59,6 @@ func (gs *GrentonSet) Refresh() refreshCounts {
 			}
 		}
 	}
-	<-gs.hkSync.flushed()
 	c.Duration = time.Since(start)
 	gs.metrics.Refresh(RefreshEvent{Time: time.Now(), Counts: c})
 
@@ -100,6 +101,9 @@ func (gs *GrentonSet) startup(ctx context.Context, autotest bool) {
 	}
 	origin := clk.Now()
 	c := gs.Refresh()
+	// No HomeKit controller is connected before the server starts, so the syncer cannot be
+	// blocked by one: HomeKit starts with the state just read.
+	<-gs.hkSync.flushed()
 	gs.Logf("startup refresh: %d of %d devices read (%d missing or invalid, %d failed) in %d ms",
 		c.Applied, c.Objects, c.Missing, c.Failed, c.Duration.Milliseconds())
 

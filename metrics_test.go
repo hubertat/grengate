@@ -89,6 +89,7 @@ func TestMetrics_EachEventReportedOnce(t *testing.T) {
 		t.Errorf("refresh event = %+v", c)
 	}
 
+	syncHomeKit(t, gs) // hap characteristics are not synchronised: no HomeKit write during a sync
 	hkWrite(findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
 	writes := m.lane(writeLane)
 	_, cmds, _ = m.snapshot()

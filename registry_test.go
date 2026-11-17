@@ -60,6 +60,7 @@ func TestRegistry_RoutesReadItemsByIdentity(t *testing.T) {
 	if c := gs.Refresh(); c.Applied != 2 || c.Missing != 2 {
 		t.Errorf("refresh = %+v, want 2 applied, 2 missing", c)
 	}
+	syncHomeKit(t, gs)
 	if v := findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn).Val; v != true {
 		t.Errorf("light On = %v, want true", v)
 	}

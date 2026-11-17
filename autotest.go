@@ -45,7 +45,6 @@ func (gs *GrentonSet) Autotest() autotestReport {
 		}
 		rep.Failures = append(rep.Failures, fmt.Sprintf("%s %s: %s", objs[i].Kind, describeDevice(devs[i]), problem))
 	}
-	<-gs.hkSync.flushed()
 
 	if len(rep.Failures) == 0 {
 		gs.Logf("autotest: all %d devices passed", rep.Passed)

@@ -1,6 +1,13 @@
 package main
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
+
+// hkSyncCloseWait bounds how long close waits for a sync in progress: hap's SetValue can
+// block on a stalled HomeKit connection.
+const hkSyncCloseWait = time.Second
 
 // hkSyncer pushes device state to HomeKit off the lane workers: hap's SetValue notifies
 // connected controllers over the network, which a lane hook must not wait for.
@@ -33,10 +40,14 @@ func newHkSyncer() *hkSyncer {
 
 func (s *hkSyncer) start() { go s.run() }
 
-// close stops the syncer; pending barriers are released.
+// close stops the syncer; pending barriers are released. It waits at most hkSyncCloseWait
+// for a sync in progress; a sync stuck in hap is left to finish on its own.
 func (s *hkSyncer) close() {
 	close(s.stop)
-	<-s.done
+	select {
+	case <-s.done:
+	case <-time.After(hkSyncCloseWait):
+	}
 	s.mu.Lock()
 	s.closed = true
 	rest := s.queue
@@ -91,8 +102,13 @@ func (s *hkSyncer) run() {
 			return
 		}
 		for {
+			select {
+			case <-s.stop:
+				return
+			default:
+			}
 			s.mu.Lock()
-			if len(s.queue) == 0 {
+			if s.closed || len(s.queue) == 0 {
 				s.mu.Unlock()
 				break
 			}
