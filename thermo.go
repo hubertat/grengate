@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/brutella/hap/accessory"
+	"github.com/brutella/hap/characteristic"
 )
 
 type Thermo struct {
@@ -78,12 +79,28 @@ func (gt *Thermo) Sync() {
 	gt.syncMu.Lock()
 	defer gt.syncMu.Unlock()
 	gt.mu.Lock()
-	current, target, state := gt.TempCurrent, gt.TempTarget, gt.State
+	current, target, state, mode := gt.TempCurrent, gt.TempTarget, gt.State, gt.Mode
 	gt.mu.Unlock()
 
+	hkCurrent, hkTarget := hkHeatingCoolingStates(state, mode)
 	gt.hk.Thermostat.CurrentTemperature.SetValue(current)
 	gt.hk.Thermostat.TargetTemperature.SetValue(target)
-	gt.hk.Thermostat.CurrentHeatingCoolingState.SetValue(state)
+	gt.hk.Thermostat.CurrentHeatingCoolingState.SetValue(hkCurrent)
+	gt.hk.Thermostat.TargetHeatingCoolingState.SetValue(hkTarget)
+}
+
+// hkHeatingCoolingStates maps Grenton's state and mode to HomeKit's current and target
+// heating/cooling state (concept 3.9): off when the state is 0; otherwise heating, with
+// target auto for mode 1 and heat for any other mode. The reverse of SetState.
+func hkHeatingCoolingStates(state, mode int) (current, target int) {
+	switch {
+	case state == 0:
+		return characteristic.CurrentHeatingCoolingStateOff, characteristic.TargetHeatingCoolingStateOff
+	case mode == 1:
+		return characteristic.CurrentHeatingCoolingStateHeat, characteristic.TargetHeatingCoolingStateAuto
+	default:
+		return characteristic.CurrentHeatingCoolingStateHeat, characteristic.TargetHeatingCoolingStateHeat
+	}
 }
 
 // commandLocked builds the write payload (all three fields, as the current script needs)
@@ -113,6 +130,7 @@ func (gt *Thermo) SetTemperature(temp float64) {
 
 // SetState is the HomeKit write of the target heating/cooling state (rule 1): off, heat
 // (State 1, Mode 0) or auto (State 1, Mode 1); cool is not supported and switches off.
+// Off keeps the mode. The confirm read brings HomeKit to the resulting state.
 func (gt *Thermo) SetState(state int) {
 	gt.mu.Lock()
 	defer gt.mu.Unlock()
@@ -120,10 +138,10 @@ func (gt *Thermo) SetState(state int) {
 		return
 	}
 	switch state {
-	case 1:
+	case characteristic.TargetHeatingCoolingStateHeat:
 		gt.State = 1
 		gt.Mode = 0
-	case 3:
+	case characteristic.TargetHeatingCoolingStateAuto:
 		gt.State = 1
 		gt.Mode = 1
 	default:
