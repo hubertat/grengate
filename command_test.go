@@ -187,3 +187,52 @@ func TestWriteLane_MergesPartialThermostatCommands(t *testing.T) {
 		t.Errorf("thermostat item = %s, want setpoint 23, state 1, mode 1", reqs[1].Body)
 	}
 }
+
+// A command is a snapshot: changing the device's fields after the write (as a poll result
+// or a later callback would) changes neither the queued nor the sent command.
+func TestCommand_SnapshotIndependentOfDeviceFields(t *testing.T) {
+	clu := allKindsClu()
+	clu.Lights = append(clu.Lights, &Light{CluObject: CluObject{Id: 5, Kind: "DOU", Name: "blocker"}})
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
+	light, thermo := clu.Lights[0], clu.Therms[0]
+
+	h := g.HoldNext(fakeSetPath)
+	blocker := gs.writer.Submit(lightCmd("DOU0005", true))[0]
+	h.Wait(t)
+	light.Set(true)
+	thermo.SetTemperature(23)
+
+	light.mu.Lock()
+	light.State = false
+	light.mu.Unlock()
+	thermo.mu.Lock()
+	thermo.TempSetpoint, thermo.State, thermo.Mode = 99, 1, 1
+	thermo.mu.Unlock()
+
+	gs.writer.mu.Lock()
+	ql := gs.writer.index[entryKey(tCLU, "DOU0001")].obj
+	qt := gs.writer.index[entryKey(tCLU, "THE0002")].obj
+	gs.writer.mu.Unlock()
+	if *ql.Light.State != true {
+		t.Error("queued light command follows the device field")
+	}
+	if *qt.Thermo.TempSetpoint != 23 || *qt.Thermo.State != 0 || *qt.Thermo.Mode != 0 {
+		t.Errorf("queued thermostat command follows the device fields: %+v", qt.Thermo)
+	}
+
+	h.Release()
+	waitResult(t, blocker)
+	settle(t, gs)
+	reqs := g.Requests(fakeSetPath)
+	if len(reqs) != 3 {
+		t.Fatalf("set requests = %d, want 3", len(reqs))
+	}
+	if l, _ := reqs[1].Items[0]["Light"].(map[string]any); l["State"] != true {
+		t.Errorf("sent light command = %s, want State true", reqs[1].Body)
+	}
+	if th, _ := reqs[2].Items[0]["Thermo"].(map[string]any); th["TempSetpoint"] != 23.0 || th["State"] != 0.0 || th["Mode"] != 0.0 {
+		t.Errorf("sent thermostat command = %s, want setpoint 23, state 0, mode 0", reqs[2].Body)
+	}
+}
