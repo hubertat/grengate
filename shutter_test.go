@@ -351,6 +351,7 @@ func TestShutter_ClockStartsOnAcknowledgement(t *testing.T) {
 	h := g.HoldNext(fakeSetPath)
 	hkTarget(t, sh, 40)
 	h.Wait(t)
+	waitFor(t, sh.sim.inboxHandled, "the target to be handled")
 	syncHomeKit(t, gs)
 	if clk.running() {
 		t.Error("clock started before the acknowledgement")
@@ -942,6 +943,8 @@ func TestShutter_UncertainStopReadStillMovingRetried(t *testing.T) {
 	g.FailNext(fakeSetPath, 500, 1)
 	tick(t, gs, 1)
 	hr.Wait(t) // the confirm read saw the motor still moving down
+	waitFor(t, sh.sim.idle, "the uncertain result to be handled")
+	syncHomeKit(t, gs)
 	assertShown(t, sh, shown{40, 40, hkDecreasing})
 	hr.Release()
 	settle(t, gs)
