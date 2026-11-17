@@ -45,9 +45,9 @@ GOOS=linux GOARCH=amd64 go build -o grengate_linux
 
 Configuration is JSON-based. See `config.json.example` for structure:
 
-- **HkPin/HkSetupId**: HomeKit pairing configuration
+- **HkPin/HkPath**: HomeKit pairing PIN and pairing storage directory
 - **Host/ReadPath/SetLightPath**: Grenton GATE HTTP endpoints
-- **FreshInSeconds**: Data freshness threshold (default: 3s)
+- **FreshInSeconds**: Flush period of the read GateBroker (default: 3s)
 - **CycleInSeconds**: Periodic refresh interval (default: 10s)
 - **InputServerPort**: Optional HTTP server port for receiving Grenton push updates (motion sensors)
 - **BridgeName**: HomeKit bridge name (default: "grengate")
@@ -124,20 +124,19 @@ Configuration is JSON-based. See `config.json.example` for structure:
 ### Key Design Patterns
 
 1. **Request Batching**: GateBroker queues requests to avoid overwhelming Grenton GATE
-2. **Freshness Checking**: `CheckFreshness()` prevents redundant updates within threshold
-3. **Periodic Refresh**: Background goroutine calls `Refresh()` at configured intervals
-4. **Mixed IDs**: Devices use "KIND####" format (e.g., "DOU0001") as unique identifiers within CLUs
-5. **Async Updates**: Many operations run in goroutines with error channels
-6. **Shutter Simulation**: Shutters simulate movement progress with tickers since Grenton doesn't provide position feedback
+2. **Periodic Refresh**: Background goroutine calls `Refresh()` at configured intervals
+3. **Mixed IDs**: Devices use "KIND####" format (e.g., "DOU0001") as unique identifiers within CLUs
+4. **Async Updates**: Many operations run in goroutines with error channels
+5. **Shutter Simulation**: Shutters simulate movement progress with tickers since Grenton doesn't provide position feedback
 
 ## Development Notes
 
-- **Tests**: `go test ./...` (`light_test.go` has helpers `newTestClu`/`findC` for building devices without a real GATE)
+- **Tests**: `go test -race ./...`. `fakegate_test.go` is a fake GATE (API described at the top of the file); `helpers_test.go` has `newTestSet`/`newTestClu` (a `GrentonSet` wired to it without a config file), `captureLog`, `eventually`; `light_test.go` has `findC`
 - **Logging**: Use `GrentonSet.Logf()` for normal logs, `Debugf()` for verbose (controlled by Verbose config)
 - **Error Handling**: Errors logged via `GrentonSet.Error()`, often with `pkg/errors.Wrap/Wrapf`
 - **Concurrency**: Mutexes used in GateBroker and Clu to prevent race conditions
 - **Timeout**: HTTP client uses 10-second timeout for requests
-- **Version**: Current version string in `main.go` constant `grengateVer`
+- **Version**: `Version`, `GitCommit` and `BuildDate` variables in `main.go`, set via ldflags at build time (`--version` prints them)
 
 ## Deployment
 

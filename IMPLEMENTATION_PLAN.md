@@ -33,16 +33,16 @@ Binaries from stages 2 to 4 have no protocol switch: they always use the legacy 
 
 **Work**:
 
-- [ ] `fakegate_test.go`: an `httptest` server standing in for the GATE. It serves a read path and a set path, keeps device state, records every request,
+- [x] `fakegate_test.go`: an `httptest` server standing in for the GATE. It serves a read path and a set path, keeps device state, records every request,
       and can be told to delay, hang until released, fail, omit devices or return invalid payloads. It answers in old-script style (object with read-back payload) or new-script style (concept 3.7).
-- [ ] Test helper that builds a `GrentonSet` wired to the fake GATE without a config file.
-- [ ] `light_test.go`: fix the `Init` call that does not compile. Rewrite `TestLight_OutletRemoteUpdateQueuesLightRequest` to assert the request the fake GATE received instead of reading the broker's queue.
-- [ ] `go vet` findings: three `Logf` calls without format verbs (`gate_broker.go`), unbuffered signal channel (`main.go`).
-- [ ] `main.go`: `--version` prints "grengate" instead of "blesrv".
-- [ ] `shutter.go`: create `cancelMovement`; refuse a move when `MaxTime` is below 100 ms (log, put the HomeKit target back) instead of sending on the channel.
-- [ ] Startup warning for duplicate accessory IDs, naming both devices (concept 3.9).
-- [ ] Remove dead code: `Light.Get`, `Thermo.GetTemperature`, `Thermo.GetState`, `CluObject.Update`, `RequestAndUpdate`, `CheckFreshness`, `MotionSensor.SetOn` with its timer fields, the commented block in `SendReq`.
-- [ ] `CLAUDE.md`: drop the references to `HkSetupId`, `grengateVer` and freshness checking.
+- [x] Test helper that builds a `GrentonSet` wired to the fake GATE without a config file.
+- [x] `light_test.go`: fix the `Init` call that does not compile. Rewrite `TestLight_OutletRemoteUpdateQueuesLightRequest` to assert the request the fake GATE received instead of reading the broker's queue.
+- [x] `go vet` findings: three `Logf` calls without format verbs (`gate_broker.go`), unbuffered signal channel (`main.go`).
+- [x] `main.go`: `--version` prints "grengate" instead of "blesrv".
+- [x] `shutter.go`: create `cancelMovement`; refuse a move when `MaxTime` is below 100 ms (log, put the HomeKit target back) instead of sending on the channel.
+- [x] Startup warning for duplicate accessory IDs, naming both devices (concept 3.9).
+- [x] Remove dead code: `Light.Get`, `Thermo.GetTemperature`, `Thermo.GetState`, `CluObject.Update`, `RequestAndUpdate`, `CheckFreshness`, `MotionSensor.SetOn` with its timer fields, the commented block in `SendReq`.
+- [x] `CLAUDE.md`: drop the references to `HkSetupId`, `grengateVer` and freshness checking.
 
 **Success Criteria**:
 
@@ -57,7 +57,7 @@ Binaries from stages 2 to 4 have no protocol switch: they always use the legacy 
 - `TestDuplicateAccessoryIdIsReported`.
 - `TestFakeGate_*`: the fake itself answers in both styles and honours hang, fail and omit instructions.
 
-**Status**: Not Started
+**Status**: Complete
 
 ---
 
