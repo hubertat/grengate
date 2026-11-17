@@ -150,6 +150,7 @@ func (gs *GrentonSet) startWorkers() {
 		metrics:    gs.metrics,
 		logf:       gs.Logf,
 		debugf:     gs.Debugf,
+		onSent:     gs.readSent,
 		onComplete: gs.readCompleted,
 	})
 	gs.reader.start()
@@ -193,10 +194,22 @@ func (gs *GrentonSet) stop() {
 	}
 }
 
-// readCompleted is the read lane's completion hook: a read item is validated and applied
-// by its device, the outcome is recorded in r.Apply, and a HomeKit sync is queued. The sync
-// is queued after every applied read, changed or not, so HomeKit values the user changed
-// without effect (a failed write) return to the device state.
+// readSent is the read lane's send hook: it records the generation of each device in the
+// request (concept 3.3, rule 4).
+func (gs *GrentonSet) readSent(entries []*laneEntry) {
+	for _, e := range entries {
+		obj := e.Obj()
+		if d, ok := gs.registry.find(obj.Clu, obj.Id); ok {
+			e.Meta = d.base().generation()
+		}
+	}
+}
+
+// readCompleted is the read lane's completion hook: a read item is validated and, if the
+// ordering rules allow, applied by its device; the outcome is recorded in r.Apply and a
+// HomeKit sync is queued for an applied result. The sync is queued after every applied
+// read, changed or not, so HomeKit values the user changed without effect (a failed write)
+// return to the device state.
 func (gs *GrentonSet) readCompleted(e *laneEntry, r *laneResult) {
 	if r.Outcome != OutcomeOK {
 		return
@@ -207,20 +220,21 @@ func (gs *GrentonSet) readCompleted(e *laneEntry, r *laneResult) {
 		r.Apply, r.Err = ApplyInvalid, fmt.Errorf("no device %s|%s configured", obj.Clu, obj.Id)
 		return
 	}
-	changed, err := d.applyRead(*r.Item)
-	if err != nil {
-		r.Apply, r.Err = ApplyInvalid, err
-		return
+	sentGen, _ := e.Meta.(uint64)
+	r.Apply, r.Err = d.applyRead(*r.Item, sentGen, r.Stamp)
+	switch r.Apply {
+	case ApplyChanged, ApplyUnchanged:
+		gs.hkSync.mark(d)
+	case ApplyDiscarded:
+		gs.Debugf("read %s|%s: discarded by the ordering rules", obj.Clu, obj.Id)
 	}
-	r.Apply = ApplyUnchanged
-	if changed {
-		r.Apply = ApplyChanged
-	}
-	gs.hkSync.mark(d)
 }
 
-// writeCompleted is the write lane's completion hook: it logs the outcome of each command.
-// A write response is an acknowledgement only and is never loaded as device state.
+// writeCompleted is the write lane's completion hook: it logs the outcome of each command
+// and records that the command finished (rule 2). If it was the device's latest command, a
+// confirm read of the device is queued (rule 5): whether the command ran or not, the read
+// brings the device and HomeKit to the state the GATE has. Nobody needs to wait for the
+// result. A write response is an acknowledgement only and is never loaded as device state.
 func (gs *GrentonSet) writeCompleted(e *laneEntry, r *laneResult) {
 	obj := e.Obj()
 	what := obj.Kind
@@ -235,6 +249,14 @@ func (gs *GrentonSet) writeCompleted(e *laneEntry, r *laneResult) {
 		gs.Error(fmt.Errorf("write %s|%s (%s) failed: %v", obj.Clu, obj.Id, what, r.Err))
 	case OutcomeUncertain:
 		gs.Error(fmt.Errorf("write %s|%s (%s): outcome uncertain after %d ms: %v", obj.Clu, obj.Id, what, ms, r.Err))
+	}
+
+	d, ok := gs.registry.find(obj.Clu, obj.Id)
+	if !ok {
+		return
+	}
+	if d.base().commandFinished(obj.seq) {
+		gs.reader.Submit(d.readRequest())
 	}
 }
 

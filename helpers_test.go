@@ -48,6 +48,16 @@ func captureLog(t testing.TB) *syncBuffer {
 	return b
 }
 
+// settle waits (with a deadline) until both lanes are idle and every HomeKit sync queued so
+// far is done: every write finished, its confirm read was applied and HomeKit shows the
+// result. The write lane is checked first, since a finished write queues a read.
+func settle(t testing.TB, gs *GrentonSet) {
+	t.Helper()
+	eventually(t, 5*time.Second, func() bool { return gs.writer.idle() && gs.reader.idle() },
+		"both lanes to become idle")
+	syncHomeKit(t, gs)
+}
+
 // newTestSet builds a GrentonSet wired to a fresh fake GATE without a config file.
 // The devices of the given CLUs are initialised (HomeKit accessories created) and
 // registered with the fake GATE in their default state. Workers are stopped at test end.

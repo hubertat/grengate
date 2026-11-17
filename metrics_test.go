@@ -160,16 +160,23 @@ func TestMetrics_Overlap(t *testing.T) {
 	if len(w) != 1 || !w[0].Overlap {
 		t.Errorf("write during a held read: %+v, want overlap", w)
 	}
-	if len(r) != 1 || !r[0].Overlap {
+	if len(r) < 1 || !r[0].Overlap {
 		t.Errorf("held read with a write during it: %+v, want overlap", r)
 	}
+	settle(t, gs) // the write's confirm read runs after the held read, alone
 
-	// Alone: no overlap.
+	// Alone: no overlap (the write, its confirm read and a refresh, one after another).
 	waitResult(t, gs.writer.Submit(lightCmd("DOU0002", true))[0])
+	settle(t, gs)
 	gs.Refresh()
 	w, r = m.lane(writeLane), m.lane(readLane)
-	if w[1].Overlap || r[1].Overlap {
-		t.Errorf("requests without the other lane busy flagged as overlapping: write %v, read %v", w[1].Overlap, r[1].Overlap)
+	if len(w) != 2 || len(r) != 4 {
+		t.Fatalf("events: %d writes, %d reads; want 2 writes and 4 reads (refresh, confirm read, confirm read, refresh)", len(w), len(r))
+	}
+	for _, e := range append(w[1:], r[1:]...) {
+		if e.Overlap {
+			t.Errorf("%v request without the other lane busy flagged as overlapping", e.Lane)
+		}
 	}
 }
 

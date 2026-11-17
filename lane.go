@@ -187,6 +187,8 @@ type lane struct {
 	queue   []*laneEntry
 	index   map[string]*laneEntry
 	stopped bool
+	// sending: the worker took entries and has not finished delivering their results.
+	sending bool
 
 	wake   chan struct{}
 	ctx    context.Context
@@ -322,6 +324,7 @@ func (l *lane) take() []*laneEntry {
 	if n == 0 {
 		return nil
 	}
+	l.sending = true
 	batch := make([]*laneEntry, n)
 	copy(batch, l.queue)
 	l.queue = append([]*laneEntry(nil), l.queue[n:]...)
@@ -347,7 +350,18 @@ func (l *lane) run() {
 			}
 		}
 		l.send(batch)
+		l.mu.Lock()
+		l.sending = false
+		l.mu.Unlock()
 	}
+}
+
+// idle reports whether the mailbox is empty and no request is being sent or completed
+// (its hooks have run and its results are delivered).
+func (l *lane) idle() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.queue) == 0 && !l.sending
 }
 
 func (l *lane) send(batch []*laneEntry) {

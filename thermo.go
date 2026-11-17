@@ -21,18 +21,17 @@ type Thermo struct {
 	State int
 }
 
-// LoadReqObject applies a read item and pushes the state to HomeKit.
-func (gt *Thermo) LoadReqObject(obj ReqObject) error { return loadReqObject(gt, obj) }
-
-func (gt *Thermo) applyRead(obj ReqObject) (bool, error) {
+func (gt *Thermo) applyRead(obj ReqObject, sentGen, _ uint64) (ApplyOutcome, error) {
 	in, err := validThermo(obj)
 	if err != nil {
-		return false, err
+		return ApplyInvalid, err
 	}
 	gt.mu.Lock()
 	defer gt.mu.Unlock()
-	changed := !gt.loaded ||
-		gt.TempCurrent != *in.TempCurrent || gt.TempSetpoint != *in.TempSetpoint || gt.TempTarget != *in.TempTarget ||
+	if !gt.acceptReadLocked(sentGen) {
+		return ApplyDiscarded, nil
+	}
+	changed := gt.TempCurrent != *in.TempCurrent || gt.TempSetpoint != *in.TempSetpoint || gt.TempTarget != *in.TempTarget ||
 		gt.State != *in.State || gt.Mode != *in.Mode
 
 	gt.TempCurrent = *in.TempCurrent
@@ -40,8 +39,7 @@ func (gt *Thermo) applyRead(obj ReqObject) (bool, error) {
 	gt.TempTarget = *in.TempTarget
 	gt.State = *in.State
 	gt.Mode = *in.Mode
-	gt.loaded = true
-	return changed, nil
+	return gt.appliedLocked(changed), nil
 }
 
 func (gt *Thermo) InitAll() {

@@ -74,18 +74,17 @@ func (ms *MotionSensor) Sync() {
 	ms.hkService.MotionDetected.SetValue(state)
 }
 
-// LoadReqObject applies a read item and pushes the state to HomeKit.
-func (ms *MotionSensor) LoadReqObject(obj ReqObject) error { return loadReqObject(ms, obj) }
-
-func (ms *MotionSensor) applyRead(obj ReqObject) (bool, error) {
+func (ms *MotionSensor) applyRead(obj ReqObject, sentGen, _ uint64) (ApplyOutcome, error) {
 	p, err := validMotion(obj)
 	if err != nil {
-		return false, err
+		return ApplyInvalid, err
 	}
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	changed := !ms.loaded || ms.State != *p.State
+	if !ms.acceptReadLocked(sentGen) {
+		return ApplyDiscarded, nil
+	}
+	changed := ms.State != *p.State
 	ms.State = *p.State
-	ms.loaded = true
-	return changed, nil
+	return ms.appliedLocked(changed), nil
 }

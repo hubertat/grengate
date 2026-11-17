@@ -7,10 +7,12 @@ type device interface {
 	base() *CluObject
 	// readRequest returns the item sent to the read endpoint for this device.
 	readRequest() ReqObject
-	// applyRead validates a read item and, if it is valid, stores it under the device lock.
-	// It does not touch HomeKit. changed reports whether the stored state changed (the first
-	// valid read always counts as a change). An invalid item leaves the device unchanged.
-	applyRead(obj ReqObject) (changed bool, err error)
+	// applyRead validates a read item and applies it under the device lock if the ordering
+	// rules allow (concept 3.3 rule 4: sentGen is the device generation recorded when the
+	// read was sent). It returns ApplyInvalid (with the reason), ApplyDiscarded, or
+	// ApplyChanged/ApplyUnchanged (the first valid read always counts as a change).
+	// stamp is the completion stamp of the response. It does not touch HomeKit.
+	applyRead(obj ReqObject, sentGen, stamp uint64) (ApplyOutcome, error)
 	// Sync pushes the device state to HomeKit. Never called with the device lock held.
 	Sync()
 }
@@ -18,15 +20,6 @@ type device interface {
 func (co *CluObject) base() *CluObject { return co }
 
 func (co *CluObject) readRequest() ReqObject { return co.Req }
-
-// loadReqObject applies a read item and pushes the result to HomeKit.
-func loadReqObject(d device, obj ReqObject) error {
-	if _, err := d.applyRead(obj); err != nil {
-		return err
-	}
-	d.Sync()
-	return nil
-}
 
 // registry finds devices by Clu + Id (the mixed id, e.g. "DOU0001"), case-insensitive.
 type registry struct {

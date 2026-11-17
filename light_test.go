@@ -62,14 +62,16 @@ func TestLight_UnknownHkTypeIsRejected(t *testing.T) {
 	}
 }
 
-func TestLight_OutletLoadReqObjectUpdatesOnAndInUse(t *testing.T) {
+func TestLight_OutletReadUpdatesOnAndInUse(t *testing.T) {
 	light := newTestLight(HkTypeOutlet)
-	newTestClu(t, light)
+	clu := &Clu{Id: "CLU_012abcde", Lights: []*Light{light}}
+	gs, gate := newTestSet(t, clu)
+	gate.SetLight(clu.Id, light.GetMixedId(), true)
 
-	err := light.LoadReqObject(ReqObject{Kind: "Light", Light: &LightPayload{State: ptr(true)}})
-	if err != nil {
-		t.Fatalf("LoadReqObject: %v", err)
+	if c := gs.Refresh(); c.Applied != 1 {
+		t.Fatalf("refresh = %+v, want the outlet applied", c)
 	}
+	syncHomeKit(t, gs)
 
 	a := light.HkAccessory()
 	if v := findC(t, a, characteristic.TypeOn).Val; v != true {

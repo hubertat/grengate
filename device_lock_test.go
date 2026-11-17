@@ -47,8 +47,8 @@ func TestDevices_ConcurrentReadsAndCommandsAreRaceFree(t *testing.T) {
 	}()
 	wg.Wait()
 
-	if n := g.RequestCount(fakeReadPath); n != 10 {
-		t.Errorf("read requests = %d, want 10", n)
+	if n := g.RequestCount(fakeReadPath); n < 10 {
+		t.Errorf("read requests = %d, want the 10 refreshes and the confirm reads", n)
 	}
 	if n := g.RequestCount(fakeSetPath); n != 15 {
 		t.Errorf("commands at the fake GATE = %d, want 15", n)

@@ -37,20 +37,19 @@ func (gl *Light) validateHkType() error {
 		gl.Name, gl.Kind, gl.Id, gl.HkType, HkTypeLightbulb, HkTypeOutlet)
 }
 
-// LoadReqObject applies a read item and pushes the state to HomeKit.
-func (gl *Light) LoadReqObject(obj ReqObject) error { return loadReqObject(gl, obj) }
-
-func (gl *Light) applyRead(obj ReqObject) (bool, error) {
+func (gl *Light) applyRead(obj ReqObject, sentGen, _ uint64) (ApplyOutcome, error) {
 	p, err := validLight(obj)
 	if err != nil {
-		return false, err
+		return ApplyInvalid, err
 	}
 	gl.mu.Lock()
 	defer gl.mu.Unlock()
-	changed := !gl.loaded || gl.State != *p.State
+	if !gl.acceptReadLocked(sentGen) {
+		return ApplyDiscarded, nil
+	}
+	changed := gl.State != *p.State
 	gl.State = *p.State
-	gl.loaded = true
-	return changed, nil
+	return gl.appliedLocked(changed), nil
 }
 
 func (gl *Light) InitAll() {

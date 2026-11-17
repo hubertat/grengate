@@ -217,19 +217,21 @@ func (sh *Shutter) submitCmdLocked(cmd shutterCmd) <-chan laneResult {
 	return sh.submitCommandLocked(req)
 }
 
-// LoadReqObject applies a read item and pushes the state to HomeKit.
-func (sh *Shutter) LoadReqObject(obj ReqObject) error { return loadReqObject(sh, obj) }
-
-func (sh *Shutter) applyRead(obj ReqObject) (bool, error) {
+// applyRead applies a read observation. A shutter is ready once a read with State and a
+// usable MaxTime (concept 3.5) has been applied. stamp is unused until the shutter
+// simulation follows observations (stage 4).
+func (sh *Shutter) applyRead(obj ReqObject, sentGen, _ uint64) (ApplyOutcome, error) {
 	p, err := validShutter(obj)
 	if err != nil {
-		return false, err
+		return ApplyInvalid, err
 	}
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	changed := !sh.loaded || sh.State != *p.State || sh.MaxTime != *p.MaxTime
+	if !sh.acceptReadLocked(sentGen) {
+		return ApplyDiscarded, nil
+	}
+	changed := sh.State != *p.State || sh.MaxTime != *p.MaxTime
 	sh.State = *p.State
 	sh.MaxTime = *p.MaxTime
-	sh.loaded = true
-	return changed, nil
+	return sh.appliedLocked(changed), nil
 }
