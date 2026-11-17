@@ -152,6 +152,8 @@ func TestOrdering_ConfirmReadAfterNewerCommandIsDiscarded(t *testing.T) {
 	hr := g.HoldNext(fakeReadPath)
 	hkWriteAsync(&wg, on1, true)
 	hr.Wait(t) // the confirm read of "on" reached the GATE, which answers "on"
+	wg.Wait()
+	syncHomeKit(t, gs) // hap characteristics are not synchronised: no HomeKit write during a sync
 
 	hw := g.HoldNext(fakeSetPath)
 	hkWriteAsync(&wg, on1, false)

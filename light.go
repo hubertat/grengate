@@ -121,9 +121,10 @@ func (gl *Light) Sync() {
 // The write lane's completion hook handles the result.
 func (gl *Light) Set(state bool) {
 	gl.mu.Lock()
-	defer gl.mu.Unlock()
 	gl.State = state
 	req := gl.Req
 	req.Light = &LightPayload{State: ptr(state)}
 	gl.submitCommandLocked(req)
+	gl.mu.Unlock()
+	gl.clu.set.hkSync.mark(gl) // see hkSyncer: a sync in progress may have overwritten the write
 }

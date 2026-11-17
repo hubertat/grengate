@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/brutella/hap/characteristic"
@@ -81,5 +83,49 @@ func TestThermostat_ModeChangeCommand(t *testing.T) {
 		if v := th.TargetHeatingCoolingState.Value(); v != c.target {
 			t.Errorf("target %d: HomeKit shows %d after the confirm read", c.target, v)
 		}
+	}
+}
+
+// A HomeKit write that lands while a sync of the same device is in progress (after its
+// state copy, before its SetValue) must not leave hap's cache at the stale copied value:
+// otherwise the user's next write of that value is dropped by hap as unchanged.
+func TestThermostat_WriteDuringSyncIsNotOverwritten(t *testing.T) {
+	clu := allKindsClu()
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
+	th := clu.Therms[0].hk.Thermostat
+
+	var once sync.Once
+	th.CurrentTemperature.OnCValueUpdate(func(_ *characteristic.C, _, _ any, req *http.Request) {
+		if req != nil {
+			return
+		}
+		// Sync has copied the state (target 21) and is pushing the current temperature;
+		// a controller writes the target now.
+		once.Do(func() {
+			if st := hkWrite(th.TargetTemperature.C, 25.0); st != 0 {
+				t.Errorf("write status %d", st)
+			}
+		})
+	})
+	h := g.HoldNext(fakeSetPath) // hold the command of the 25 write
+	g.SetThermo(tCLU, "THE0002", 20.5, 21, 0, 0)
+	gs.Refresh() // the current temperature changed: Sync runs
+	syncHomeKit(t, gs)
+	syncHomeKit(t, gs) // the write marked the thermostat during that sync, maybe after the first barrier
+	h.Wait(t)
+	if v := th.TargetTemperature.Value(); v != 25.0 {
+		t.Errorf("HomeKit target = %v after the sync, want the written 25", v)
+	}
+
+	// The user goes back to 21: it must reach the GATE.
+	if st := hkWrite(th.TargetTemperature.C, 21.0); st != 0 {
+		t.Fatalf("status %d", st)
+	}
+	h.Release()
+	settle(t, gs)
+	if got := g.Payload(tCLU, "THE0002")["TempSetpoint"]; got != 21.0 {
+		t.Errorf("GATE setpoint = %v, want 21", got)
 	}
 }

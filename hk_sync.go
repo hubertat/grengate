@@ -12,6 +12,13 @@ const hkSyncCloseWait = time.Second
 // hkSyncer pushes device state to HomeKit off the lane workers: hap's SetValue notifies
 // connected controllers over the network, which a lane hook must not wait for.
 // A device marked several times before it is synced is synced once, with its latest state.
+//
+// A HomeKit write can land while its device is being synced, after Sync copied the device
+// state and before its SetValue: the SetValue then puts the stale copy into hap's cache,
+// and hap would drop the user's next write of that value as unchanged. Every HomeKit write
+// callback therefore marks its device after changing the state (hap calls it after storing
+// the written value): the mark is taken after the running sync was dequeued, so one more
+// sync follows and copies the written state.
 type hkSyncer struct {
 	mu     sync.Mutex
 	queue  []hkSyncItem

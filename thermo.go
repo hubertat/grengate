@@ -119,13 +119,15 @@ func (gt *Thermo) commandLocked() ReqObject {
 // and command snapshot under the device lock, no waiting for the GATE.
 func (gt *Thermo) SetTemperature(temp float64) {
 	gt.mu.Lock()
-	defer gt.mu.Unlock()
 	if !gt.ready { // refused by writeGuard; never send a command built on unknown values
+		gt.mu.Unlock()
 		return
 	}
 	gt.TempSetpoint = temp
 	gt.TempTarget = temp // what HomeKit shows as the target until the confirm read
 	gt.submitCommandLocked(gt.commandLocked())
+	gt.mu.Unlock()
+	gt.clu.set.hkSync.mark(gt) // see hkSyncer: a sync in progress may have overwritten the write
 }
 
 // SetState is the HomeKit write of the target heating/cooling state (rule 1): off, heat
@@ -133,8 +135,8 @@ func (gt *Thermo) SetTemperature(temp float64) {
 // Off keeps the mode. The confirm read brings HomeKit to the resulting state.
 func (gt *Thermo) SetState(state int) {
 	gt.mu.Lock()
-	defer gt.mu.Unlock()
 	if !gt.ready { // refused by writeGuard
+		gt.mu.Unlock()
 		return
 	}
 	switch state {
@@ -148,4 +150,6 @@ func (gt *Thermo) SetState(state int) {
 		gt.State = 0
 	}
 	gt.submitCommandLocked(gt.commandLocked())
+	gt.mu.Unlock()
+	gt.clu.set.hkSync.mark(gt) // see hkSyncer: a sync in progress may have overwritten the write
 }

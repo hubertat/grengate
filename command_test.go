@@ -87,6 +87,8 @@ func TestThermostat_ModeAndSetpointPendingTogetherAreOneCommand(t *testing.T) {
 	h.Wait(t)
 	hkWriteAsync(&wg, thermo.TargetHeatingCoolingState.C, characteristic.TargetHeatingCoolingStateAuto)
 	eventually(t, 2*time.Second, func() bool { return queuedIn(gs.writer, "THE0002") }, "mode change queued")
+	wg.Wait()          // the callbacks returned: their HomeKit syncs are marked
+	syncHomeKit(t, gs) // hap characteristics are not synchronised: no HomeKit write during a sync
 	hkWriteAsync(&wg, thermo.TargetTemperature.C, 23.0)
 	eventually(t, 2*time.Second, func() bool {
 		gs.writer.mu.Lock()
