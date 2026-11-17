@@ -76,8 +76,6 @@ func (gt *Thermo) AppendHk() *accessory.Thermostat {
 
 	gt.hk.Thermostat.TargetHeatingCoolingState.OnValueRemoteUpdate(gt.SetState)
 	gt.hk.Thermostat.TargetTemperature.OnValueRemoteUpdate(gt.SetTemperature)
-	// gt.hk.Thermostat.CurrentTemperature.OnValueRemoteGet(gt.GetTemperature)
-	// gt.hk.Thermostat.CurrentHeatingCoolingState.OnValueRemoteGet(gt.GetState)
 
 	gt.clu.set.Logf("HK Thermostat added (id: %x, type: %d", gt.hk.A.Id, gt.hk.A.Type)
 	return gt.hk
@@ -88,36 +86,6 @@ func (gt *Thermo) Sync() {
 	gt.hk.Thermostat.CurrentTemperature.SetValue(gt.TempCurrent)
 	gt.hk.Thermostat.TargetTemperature.SetValue(gt.TempTarget)
 	gt.hk.Thermostat.CurrentHeatingCoolingState.SetValue(gt.GetHkState())
-
-}
-
-func (gt *Thermo) GetTemperature() float64 {
-
-	if gt.clu.set.CheckFreshness() {
-		return gt.TempCurrent
-	}
-
-	err := gt.Update()
-	if err != nil {
-		gt.clu.set.Error(err)
-	}
-
-	return gt.TempCurrent
-
-}
-func (gt *Thermo) GetState() int {
-
-	if gt.clu.set.CheckFreshness() {
-
-		return gt.GetHkState()
-	}
-
-	err := gt.Update()
-	if err != nil {
-		gt.clu.set.Error(err)
-	}
-
-	return gt.GetHkState()
 
 }
 

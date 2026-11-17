@@ -173,7 +173,7 @@ func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.A) {
 	return
 }
 
-// Refresh is calling RequestAndUpdate function to get fresh values
+// Refresh queues a read for every device and applies the answers
 func (gs *GrentonSet) Refresh() {
 
 	query := []ReqObject{}
@@ -208,17 +208,6 @@ func (gs *GrentonSet) Refresh() {
 	gs.lastUpdated = time.Now()
 
 	gs.Debugf("GrentonSet [%v] Refresh finished\n", &gs)
-}
-
-// RequestAndUpdate collects all needed objects and make POST request to update state of objects
-func (gs *GrentonSet) RequestAndUpdate(query []ReqObject) error {
-	gs.Logf("GrentonSet RequestAndUpdate: started [%v]", &gs)
-
-	objectsPending := gs.broker.Queue(nil, query...)
-	for len(objectsPending) > 0 {
-		objectsPending = gs.broker.Queue(nil, objectsPending...)
-	}
-	return nil
 }
 
 func (gs *GrentonSet) update(data []ReqObject) {
@@ -329,11 +318,6 @@ func (gs *GrentonSet) FindMotionSensor(fClu, fSensor string) (*MotionSensor, err
 		}
 	}
 	return nil, fmt.Errorf("sensor not found [clu: %s id: %s]", fClu, fSensor)
-}
-
-// CheckFreshness checks if time passed from last refresh is greater than set treshold
-func (gs *GrentonSet) CheckFreshness() bool {
-	return time.Since(gs.lastUpdated) <= gs.freshDuration
 }
 
 // TestAllGrentonGate iterates every object and checks individually if request is success http code

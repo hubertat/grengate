@@ -87,15 +87,6 @@ func (co *CluObject) TestGrentonGate(ro ReqObject) bool {
 	return true
 }
 
-func (co *CluObject) Update() error {
-	if co.clu.set.CheckFreshness() {
-		return nil
-	}
-
-	return co.clu.set.RequestAndUpdate([]ReqObject{co.Req})
-
-}
-
 func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
 
 	if input.Cmd == "" {
@@ -109,41 +100,4 @@ func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
 	err = <-errors
 
 	return
-
-	// gl.clu.block.Lock()
-	// defer gl.clu.block.Unlock()
-
-	// jsonQ, _ := json.Marshal(input)
-	// gl.clu.set.Debugf("SendReq: \nurl: %s\nquery: %s\n", gl.clu.set.GetSetPath(), jsonQ)
-	// req, err := http.NewRequest("POST", gl.clu.set.GetSetPath(), bytes.NewBuffer(jsonQ))
-	// if err != nil {
-	// 	gl.clu.set.Error(fmt.Errorf("SendReq: http.NewRequest error: %w", err))
-	// 	return
-	// }
-
-	// req.Header.Set("Content-Type", "application/json")
-	// client := http.Client{
-	// 	Timeout: 10 * time.Second,
-	// }
-	// resp, err := client.Do(req)
-	// if err != nil {
-	// 	gl.clu.set.Error(fmt.Errorf("SendReq: http.Client.Do error: %w", err))
-	// 	return
-	// }
-
-	// defer resp.Body.Close()
-	// if resp.StatusCode >= 300 || resp.StatusCode < 200 {
-	// 	gl.clu.set.Error(fmt.Errorf("SendReq: Received non-success http response from grenton host: %v", resp.Status))
-	// 	return
-	// }
-
-	// bodyBytes, _ := ioutil.ReadAll(resp.Body)
-	// gl.clu.set.Debugf("SendReq received response: \n%s\n", bodyBytes)
-	// err = json.Unmarshal(bodyBytes, &result)
-	// if err != nil {
-	// 	gl.clu.set.Error(fmt.Errorf("SendReq: error during json Unmarshal: %w", err))
-	// 	return
-	// }
-
-	// return
 }

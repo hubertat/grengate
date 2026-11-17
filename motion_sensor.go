@@ -2,22 +2,16 @@ package main
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/brutella/hap/accessory"
 	"github.com/brutella/hap/characteristic"
 	"github.com/brutella/hap/service"
 )
 
-const clearMotionEventDuration = 15 * time.Second
-
 type MotionSensor struct {
 	CluObject
 
 	State bool
-
-	clearTimer      *time.Timer
-	resetClearTimer chan bool
 
 	hkAccessory *accessory.A
 	hkService   *service.MotionSensor
@@ -65,23 +59,6 @@ func (ms *MotionSensor) appendHk() *accessory.A {
 func (ms *MotionSensor) Set(state bool) {
 	ms.State = state
 	ms.hkService.MotionDetected.SetValue(state)
-}
-
-func (ms *MotionSensor) SetOn() {
-	ms.Set(true)
-	ms.clearTimer = time.NewTimer(clearMotionEventDuration)
-	go func() {
-		for {
-			select {
-			case <-ms.clearTimer.C:
-				ms.Set(false)
-				return
-			case <-ms.resetClearTimer:
-				ms.clearTimer.Stop()
-				return
-			}
-		}
-	}()
 }
 
 // LoadReqObject checks object received from http request end reads it into MotionSensor

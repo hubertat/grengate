@@ -108,21 +108,6 @@ func (gl *Light) Sync() {
 	}
 }
 
-func (gl *Light) Get() bool {
-
-	// if gl.clu.set.CheckFreshness() {
-	// 	return gl.State
-	// }
-
-	err := gl.Update()
-	if err != nil {
-		gl.clu.set.Error(err)
-	}
-
-	return gl.State
-
-}
-
 func (gl *Light) Set(state bool) {
 
 	gl.State = state
