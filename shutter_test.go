@@ -1029,3 +1029,24 @@ func TestShutter_UncertainOlderGenerationDoesNothing(t *testing.T) {
 	assertShown(t, sh, shown{80, 80, hkStopped})
 	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "MOVEUP", "STOP")
 }
+
+// With the real clock (MaxTime 1000 ms: one step is 10 ms) a movement reaches its target and
+// stops there on its own.
+func TestShutter_RealClockReachesTarget(t *testing.T) {
+	checkGoroutines(t)
+	clu := shutterClu()
+	gs, g := newTestSetWith(t, func(gs *GrentonSet) { gs.shutterClock = realClock{} }, clu)
+	g.SetShutter(tCLU, tSID, 1000, 0)
+	gs.Refresh()
+	settle(t, gs)
+	sh := clu.Shutters[0]
+	start := time.Now()
+	hkTarget(t, sh, 90)
+	eventually(t, 3*time.Second, func() bool { return len(shutterCmds(g)) == 2 && quiet(gs) }, "the STOP at the target")
+	if d := time.Since(start); d < 100*time.Millisecond {
+		t.Errorf("STOP after %v, before ten 10 ms steps", d)
+	}
+	syncHomeKit(t, gs)
+	assertShown(t, sh, shown{90, 90, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP")
+}
