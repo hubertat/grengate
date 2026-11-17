@@ -45,12 +45,18 @@ type GrentonSet struct {
 	// SetterQueueSize is the most commands one write request carries (default 5). It only
 	// decides grouping, never what a command contains. Ignored with LegacyWriteScript.
 	SetterQueueSize int
+	// SetterFlushMs is the batching window of the write lane in ms (default 30): after the
+	// first command arrives at an idle lane, the lane waits this long before it sends.
+	// Ignored with LegacyWriteScript.
+	SetterFlushMs int
 
 	cycleDuration time.Duration
 	// clock drives the refresh scheduler (nil: real time).
 	clock clock
 	// shutterClock drives the shutter simulations (nil: real time).
 	shutterClock timerClock
+	// writeTimers runs the write lane's batching window (nil: real time).
+	writeTimers timerClock
 
 	registry *registry
 
@@ -203,13 +209,21 @@ func (gs *GrentonSet) writeLaneConfig() laneConfig {
 	if gs.SetterQueueSize <= 0 {
 		gs.SetterQueueSize = defaultSetterQueueSize
 	}
+	if gs.SetterFlushMs <= 0 {
+		gs.SetterFlushMs = defaultSetterFlushMs
+	}
 	cfg.maxItems, cfg.asArray = gs.SetterQueueSize, true
-	gs.Logf("write protocol: array requests of up to %d commands, partial thermostat commands", cfg.maxItems)
+	cfg.window, cfg.timers = time.Duration(gs.SetterFlushMs)*time.Millisecond, gs.writeTimers
+	gs.Logf("write protocol: array requests of up to %d commands after a %d ms window, partial thermostat commands",
+		cfg.maxItems, gs.SetterFlushMs)
 	return cfg
 }
 
 // Defaults of the optional write tuning fields.
-const defaultSetterQueueSize = 5
+const (
+	defaultSetterQueueSize = 5
+	defaultSetterFlushMs   = 30
+)
 
 // shutters returns every configured shutter.
 func (gs *GrentonSet) shutters() []*Shutter {
