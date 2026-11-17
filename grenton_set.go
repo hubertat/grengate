@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/brutella/hap/accessory"
@@ -37,9 +38,14 @@ type GrentonSet struct {
 	cycling       *time.Ticker
 
 	broker GateBroker
-	setter GateBroker
 
 	registry *registry
+
+	// requestTimeout bounds every GATE request (default 10 s; tests shorten it).
+	requestTimeout time.Duration
+	// stamps is the completion counter shared by both lanes (concept 3.1).
+	stamps atomic.Uint64
+	writer *lane
 }
 
 // Debugf logs info, when Verbose option is on
@@ -113,10 +119,51 @@ func (gs *GrentonSet) initBrokers() {
 	gs.broker = GateBroker{}
 	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration)
 	gs.broker.PostPath = gs.Host + gs.ReadPath
+}
 
-	gs.setter = GateBroker{}
-	gs.setter.Init(gs, 1, 200*time.Millisecond)
-	gs.setter.PostPath = gs.GetSetPath()
+// startWorkers creates the write lane and starts its worker. Call after InitClus and
+// before any HomeKit callback can run.
+func (gs *GrentonSet) startWorkers() {
+	// Legacy write protocol (the script deployed today): one single-object command per request.
+	gs.writer = newLane(laneConfig{
+		kind:       writeLane,
+		url:        gs.GetSetPath(),
+		timeout:    gs.requestTimeout,
+		maxItems:   1,
+		asArray:    false,
+		merge:      mergeReplace,
+		stamps:     &gs.stamps,
+		logf:       gs.Logf,
+		debugf:     gs.Debugf,
+		onComplete: gs.writeCompleted,
+	})
+	gs.writer.start()
+}
+
+// Stop stops the workers. Pending submissions are resolved as failed.
+func (gs *GrentonSet) Stop() {
+	if gs.writer != nil {
+		gs.writer.stop()
+	}
+}
+
+// writeCompleted is the write lane's completion hook: it logs the outcome of each command.
+// A write response is an acknowledgement only and is never loaded as device state.
+func (gs *GrentonSet) writeCompleted(e *laneEntry, r *laneResult) {
+	obj := e.Obj()
+	what := obj.Kind
+	if obj.Cmd != "" && obj.Cmd != "SET" {
+		what += " " + obj.Cmd
+	}
+	ms := r.Completed.Sub(r.Sent).Milliseconds()
+	switch r.Outcome {
+	case OutcomeOK:
+		gs.Logf("write %s|%s (%s): acknowledged in %d ms", obj.Clu, obj.Id, what, ms)
+	case OutcomeError:
+		gs.Error(fmt.Errorf("write %s|%s (%s) failed: %v", obj.Clu, obj.Id, what, r.Err))
+	case OutcomeUncertain:
+		gs.Error(fmt.Errorf("write %s|%s (%s): outcome uncertain after %d ms: %v", obj.Clu, obj.Id, what, ms, r.Err))
+	}
 }
 
 // InitClus initialize every clu object, calls inner InitAll and sets pointer to parent struct

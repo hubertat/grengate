@@ -137,10 +137,7 @@ func (sh *Shutter) SetPosition(target int) {
 
 	sh.clu.set.Debugf("Shutter setting position cmd: %v\n", cmd)
 
-	err := sh.sendCmd(cmd)
-	if err != nil {
-		sh.clu.set.Error(fmt.Errorf("Shutter sendCmd: error from sending request:\n%v", err))
-	}
+	sh.sendCmd(cmd)
 
 	sh.mu.Lock()
 	if sh.looping {
@@ -198,13 +195,9 @@ func (sh *Shutter) endMove() {
 	sh.Sync()
 }
 
-func (sh *Shutter) sendCmd(cmd shutterCmd) error {
-	req := ReqObject{
-		Kind: "Shutter",
-		Clu:  sh.clu.Id,
-		Id:   sh.GetMixedId(),
-	}
-
+// sendCmd sends a movement command and waits for its result (logged by the write lane).
+func (sh *Shutter) sendCmd(cmd shutterCmd) {
+	req := sh.Req
 	switch cmd {
 	case shutterUp:
 		req.Cmd = "MOVEUP"
@@ -213,12 +206,7 @@ func (sh *Shutter) sendCmd(cmd shutterCmd) error {
 	case shutterStop:
 		req.Cmd = "STOP"
 	}
-
-	// ignoring returned object - cmd endpoint not working correctly
-	// status will be updated on next refresh
-	// obj, err := sh.SendReq(req)
-	_, err := sh.SendReq(req)
-	return err
+	sh.sendCommand(req)
 }
 
 // LoadReqObject applies a read item and pushes the state to HomeKit.

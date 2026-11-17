@@ -50,7 +50,7 @@ func captureLog(t testing.TB) *syncBuffer {
 
 // newTestSet builds a GrentonSet wired to a fresh fake GATE without a config file.
 // The devices of the given CLUs are initialised (HomeKit accessories created) and
-// registered with the fake GATE in their default state. Brokers are the ones Config creates.
+// registered with the fake GATE in their default state. Workers are stopped at test end.
 func newTestSet(t testing.TB, clus ...*Clu) (*GrentonSet, *fakeGate) {
 	t.Helper()
 	g := newFakeGate(t)
@@ -65,6 +65,8 @@ func newTestSet(t testing.TB, clus ...*Clu) (*GrentonSet, *fakeGate) {
 	}
 	gs.initBrokers()
 	gs.InitClus()
+	gs.startWorkers()
+	t.Cleanup(gs.Stop)
 	g.AddDevicesFrom(gs)
 	return gs, g
 }

@@ -118,14 +118,7 @@ func (gt *Thermo) SetTemperature(temp float64) {
 	req := gt.commandLocked()
 	gt.mu.Unlock()
 
-	obj, err := gt.SendReq(req)
-
-	if err != nil {
-		gt.clu.set.Error(fmt.Errorf("Thermo SetTemperature: %w", err))
-		return
-	}
-
-	gt.LoadReqObject(obj)
+	gt.sendCommand(req)
 }
 func (gt *Thermo) SetState(state int) {
 	gt.mu.Lock()
@@ -142,12 +135,5 @@ func (gt *Thermo) SetState(state int) {
 	req := gt.commandLocked()
 	gt.mu.Unlock()
 
-	obj, err := gt.SendReq(req)
-
-	if err != nil {
-		gt.clu.set.Error(fmt.Errorf("Thermo SetState: %w", err))
-		return
-	}
-
-	gt.LoadReqObject(obj)
+	gt.sendCommand(req)
 }

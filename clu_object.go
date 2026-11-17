@@ -105,17 +105,17 @@ func (co *CluObject) TestGrentonGate(ro ReqObject) bool {
 	return true
 }
 
-func (gl *CluObject) SendReq(input ReqObject) (result ReqObject, err error) {
-
-	if input.Cmd == "" {
-		input.Cmd = "SET"
+// sendCommand submits a command to the write lane and waits for its result (HomeKit
+// callbacks still wait for the GATE in this stage). The outcome is logged by the write
+// lane's completion hook; a superseded command is logged here.
+func (co *CluObject) sendCommand(cmd ReqObject) laneResult {
+	if cmd.Cmd == "" {
+		cmd.Cmd = "SET"
 	}
-
-	errors := make(chan error)
-
-	gl.clu.set.setter.Queue(errors, input)
-
-	err = <-errors
-
-	return
+	gs := co.clu.set
+	r := <-gs.writer.Submit(cmd)[0]
+	if r.Outcome == OutcomeSuperseded {
+		gs.Debugf("write %s|%s (%s): superseded by a newer command", cmd.Clu, cmd.Id, cmd.Kind)
+	}
+	return r
 }

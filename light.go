@@ -124,9 +124,5 @@ func (gl *Light) Set(state bool) {
 	req.Light = &Light{CluObject: gl.wireIdentity(), State: state, HkType: gl.HkType}
 	gl.mu.Unlock()
 
-	_, err := gl.SendReq(req)
-
-	if err != nil {
-		gl.clu.set.Error(err)
-	}
+	gl.sendCommand(req)
 }

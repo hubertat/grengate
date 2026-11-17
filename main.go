@@ -47,6 +47,8 @@ func main() {
 	}
 
 	gren.InitClus()
+	gren.startWorkers()
+	defer gren.Stop()
 
 	if gren.PerformAutotest || *performAutotest {
 		log.Print("Testing all Grenton elements")
