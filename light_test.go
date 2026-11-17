@@ -66,7 +66,7 @@ func TestLight_OutletLoadReqObjectUpdatesOnAndInUse(t *testing.T) {
 	light := newTestLight(HkTypeOutlet)
 	newTestClu(t, light)
 
-	err := light.LoadReqObject(ReqObject{Kind: "Light", Light: &Light{State: true}})
+	err := light.LoadReqObject(ReqObject{Kind: "Light", Light: &LightPayload{State: ptr(true)}})
 	if err != nil {
 		t.Fatalf("LoadReqObject: %v", err)
 	}

@@ -41,16 +41,14 @@ func (gl *Light) validateHkType() error {
 func (gl *Light) LoadReqObject(obj ReqObject) error { return loadReqObject(gl, obj) }
 
 func (gl *Light) applyRead(obj ReqObject) (bool, error) {
-	if obj.Kind != "Light" {
-		return false, fmt.Errorf("Light: wrong object kind (%s)", obj.Kind)
-	}
-	if obj.Light == nil {
-		return false, fmt.Errorf("Light: missing Light object")
+	p, err := validLight(obj)
+	if err != nil {
+		return false, err
 	}
 	gl.mu.Lock()
 	defer gl.mu.Unlock()
-	changed := !gl.loaded || gl.State != obj.Light.State
-	gl.State = obj.Light.State
+	changed := !gl.loaded || gl.State != *p.State
+	gl.State = *p.State
 	gl.loaded = true
 	return changed, nil
 }
@@ -60,8 +58,6 @@ func (gl *Light) InitAll() {
 		Kind: "Light",
 		Clu:  gl.clu.Id,
 		Id:   gl.GetMixedId(),
-
-		// Light: gl,
 	}
 	gl.AppendHk()
 }
@@ -121,7 +117,7 @@ func (gl *Light) Set(state bool) {
 	gl.mu.Lock()
 	gl.State = state
 	req := gl.Req
-	req.Light = &Light{CluObject: gl.wireIdentity(), State: state, HkType: gl.HkType}
+	req.Light = &LightPayload{State: ptr(state)}
 	result := gl.submitCommandLocked(req)
 	gl.mu.Unlock()
 

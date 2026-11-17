@@ -13,10 +13,14 @@ type ReqObject struct {
 	Cmd    string `json:",omitempty"`
 	Source string `json:",omitempty"`
 
-	Thermo       *Thermo       `json:",omitempty"`
-	Light        *Light        `json:",omitempty"`
-	Shutter      *Shutter      `json:",omitempty"`
-	MotionSensor *MotionSensor `json:",omitempty"`
+	Thermo       *ThermoPayload  `json:",omitempty"`
+	Light        *LightPayload   `json:",omitempty"`
+	Shutter      *ShutterPayload `json:",omitempty"`
+	MotionSensor *MotionPayload  `json:",omitempty"`
+
+	// seq is the device's command sequence number (commands only, never sent): the write
+	// completion hook compares it with the device's latest command (concept 3.3, rule 2).
+	seq uint64
 }
 
 func (ro ReqObject) Equal(to ReqObject) bool {
@@ -42,12 +46,6 @@ type CluObject struct {
 
 	// loaded is set once a valid read result has been applied.
 	loaded bool
-}
-
-// wireIdentity copies the identity fields the device structs carry on the wire, for
-// command snapshots built under the lock (the snapshot must not point at the live device).
-func (co *CluObject) wireIdentity() CluObject {
-	return CluObject{Id: co.Id, Name: co.Name, Kind: co.Kind}
 }
 
 func (co *CluObject) GetLongId() uint64 {

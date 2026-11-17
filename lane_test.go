@@ -55,7 +55,7 @@ func assertPending(t testing.TB, ch <-chan laneResult, what string) {
 }
 
 func lightCmd(id string, on bool) ReqObject {
-	return ReqObject{Clu: tCLU, Id: id, Kind: "Light", Cmd: "SET", Light: &Light{State: on}}
+	return ReqObject{Clu: tCLU, Id: id, Kind: "Light", Cmd: "SET", Light: &LightPayload{State: ptr(on)}}
 }
 
 func lightRead(id string) ReqObject {
@@ -285,7 +285,7 @@ func TestLane_MergedReadsEachGetOutcomeOnOwnChannel(t *testing.T) {
 	var stamp uint64
 	for i, ch := range merged {
 		r := waitResult(t, ch)
-		if r.Outcome != OutcomeOK || r.Item == nil || r.Item.Light == nil || !r.Item.Light.State {
+		if r.Outcome != OutcomeOK || r.Item == nil || r.Item.Light == nil || r.Item.Light.State == nil || !*r.Item.Light.State {
 			t.Errorf("merged read %d = %+v", i, r)
 		}
 		if i == 0 {
@@ -397,7 +397,7 @@ func TestLane_CommandThatCannotBeSentIsError(t *testing.T) {
 	g := newFakeGate(t)
 	g.SetThermo(tCLU, "THE0002", 20, 21, 0, 0)
 	l := newTestLane(t, g, writeLane, nil)
-	cmd := ReqObject{Clu: tCLU, Id: "THE0002", Kind: "Thermo", Cmd: "SET", Thermo: &Thermo{TempSetpoint: math.NaN()}}
+	cmd := ReqObject{Clu: tCLU, Id: "THE0002", Kind: "Thermo", Cmd: "SET", Thermo: &ThermoPayload{TempSetpoint: ptr(math.NaN())}}
 	r := waitResult(t, l.Submit(cmd)[0])
 	if r.Outcome != OutcomeError || r.Err == nil {
 		t.Errorf("outcome %v (%v), want error: the command was never sent", r.Outcome, r.Err)

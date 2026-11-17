@@ -221,17 +221,15 @@ func (sh *Shutter) submitCmdLocked(cmd shutterCmd) <-chan laneResult {
 func (sh *Shutter) LoadReqObject(obj ReqObject) error { return loadReqObject(sh, obj) }
 
 func (sh *Shutter) applyRead(obj ReqObject) (bool, error) {
-	if obj.Kind != "Shutter" {
-		return false, fmt.Errorf("Shutter: wrong object kind (%s)", obj.Kind)
-	}
-	if obj.Shutter == nil {
-		return false, fmt.Errorf("Shutter: missing Shutter object")
+	p, err := validShutter(obj)
+	if err != nil {
+		return false, err
 	}
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	changed := !sh.loaded || sh.State != obj.Shutter.State || sh.MaxTime != obj.Shutter.MaxTime
-	sh.State = obj.Shutter.State
-	sh.MaxTime = obj.Shutter.MaxTime
+	changed := !sh.loaded || sh.State != *p.State || sh.MaxTime != *p.MaxTime
+	sh.State = *p.State
+	sh.MaxTime = *p.MaxTime
 	sh.loaded = true
 	return changed, nil
 }

@@ -15,10 +15,7 @@ type Thermo struct {
 
 	TempCurrent,
 	TempSetpoint,
-	TempTarget,
-	TempHoliday,
-	TempMax,
-	TempMin float64
+	TempTarget float64
 
 	Mode,
 	State int
@@ -28,28 +25,21 @@ type Thermo struct {
 func (gt *Thermo) LoadReqObject(obj ReqObject) error { return loadReqObject(gt, obj) }
 
 func (gt *Thermo) applyRead(obj ReqObject) (bool, error) {
-	if obj.Kind != "Thermo" {
-		return false, fmt.Errorf("Thermo: wrong object kind (%s)", obj.Kind)
+	in, err := validThermo(obj)
+	if err != nil {
+		return false, err
 	}
-	if obj.Thermo == nil {
-		return false, fmt.Errorf("Thermo: missing Thermo object")
-	}
-	in := obj.Thermo
 	gt.mu.Lock()
 	defer gt.mu.Unlock()
 	changed := !gt.loaded ||
-		gt.TempCurrent != in.TempCurrent || gt.TempSetpoint != in.TempSetpoint || gt.TempTarget != in.TempTarget ||
-		gt.TempMin != in.TempMin || gt.TempMax != in.TempMax || gt.TempHoliday != in.TempHoliday ||
-		gt.State != in.State || gt.Mode != in.Mode
+		gt.TempCurrent != *in.TempCurrent || gt.TempSetpoint != *in.TempSetpoint || gt.TempTarget != *in.TempTarget ||
+		gt.State != *in.State || gt.Mode != *in.Mode
 
-	gt.TempCurrent = in.TempCurrent
-	gt.TempSetpoint = in.TempSetpoint
-	gt.TempTarget = in.TempTarget
-	gt.TempMin = in.TempMin
-	gt.TempMax = in.TempMax
-	gt.TempHoliday = in.TempHoliday
-	gt.State = in.State
-	gt.Mode = in.Mode
+	gt.TempCurrent = *in.TempCurrent
+	gt.TempSetpoint = *in.TempSetpoint
+	gt.TempTarget = *in.TempTarget
+	gt.State = *in.State
+	gt.Mode = *in.Mode
 	gt.loaded = true
 	return changed, nil
 }
@@ -97,17 +87,10 @@ func (gt *Thermo) Sync() {
 // from a copy of the device state. Call with gt.mu held.
 func (gt *Thermo) commandLocked() ReqObject {
 	req := gt.Req
-	req.Thermo = &Thermo{
-		CluObject:    gt.wireIdentity(),
-		Source:       gt.Source,
-		TempCurrent:  gt.TempCurrent,
-		TempSetpoint: gt.TempSetpoint,
-		TempTarget:   gt.TempTarget,
-		TempHoliday:  gt.TempHoliday,
-		TempMax:      gt.TempMax,
-		TempMin:      gt.TempMin,
-		Mode:         gt.Mode,
-		State:        gt.State,
+	req.Thermo = &ThermoPayload{
+		TempSetpoint: ptr(gt.TempSetpoint),
+		State:        ptr(gt.State),
+		Mode:         ptr(gt.Mode),
 	}
 	return req
 }

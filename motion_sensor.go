@@ -78,16 +78,14 @@ func (ms *MotionSensor) Sync() {
 func (ms *MotionSensor) LoadReqObject(obj ReqObject) error { return loadReqObject(ms, obj) }
 
 func (ms *MotionSensor) applyRead(obj ReqObject) (bool, error) {
-	if obj.Kind != "MotionSensor" {
-		return false, fmt.Errorf("MotionSensor: wrong object kind (%s)", obj.Kind)
-	}
-	if obj.MotionSensor == nil {
-		return false, fmt.Errorf("MotionSensor: missing MotionSensor object")
+	p, err := validMotion(obj)
+	if err != nil {
+		return false, err
 	}
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	changed := !ms.loaded || ms.State != obj.MotionSensor.State
-	ms.State = obj.MotionSensor.State
+	changed := !ms.loaded || ms.State != *p.State
+	ms.State = *p.State
 	ms.loaded = true
 	return changed, nil
 }
