@@ -248,14 +248,22 @@ func (l *lane) stop() {
 	}
 }
 
+// resolveStopped gives up the submissions of one entry (one stamp for all of them) after
+// the lane stopped: never sent, so a read failed and a command did not run.
 func (l *lane) resolveStopped(subs []*laneSub) {
-	o := OutcomeFailed
-	if l.cfg.kind == writeLane {
-		o = OutcomeError
-	}
+	r := laneResult{Outcome: l.notSentOutcome(), Err: errLaneStopped, Stamp: l.cfg.stamps.Add(1)}
 	for _, s := range subs {
-		s.deliver(laneResult{Outcome: o, Err: errLaneStopped, Stamp: l.cfg.stamps.Add(1)})
+		s.deliver(r)
 	}
+}
+
+// notSentOutcome is the outcome of an entry whose request never left: reads failed,
+// commands definitely did not run.
+func (l *lane) notSentOutcome() Outcome {
+	if l.cfg.kind == writeLane {
+		return OutcomeError
+	}
+	return OutcomeFailed
 }
 
 // Submit queues objects (one per device) and returns one result channel per object, in
@@ -273,7 +281,9 @@ func (l *lane) Submit(objs ...ReqObject) []<-chan laneResult {
 	l.mu.Lock()
 	if l.stopped {
 		l.mu.Unlock()
-		l.resolveStopped(subs)
+		for _, s := range subs { // each submission is an entry of its own
+			l.resolveStopped([]*laneSub{s})
+		}
 		return chans
 	}
 	for i, obj := range objs {
@@ -357,31 +367,43 @@ func (l *lane) send(batch []*laneEntry) {
 	for _, e := range batch {
 		e.sent = sent
 	}
-	overlapped := false
-	if err == nil {
-		if l.cfg.onSent != nil {
-			l.cfg.onSent(batch)
+	switch {
+	case err != nil:
+		err = fmt.Errorf("encoding request: %w", err)
+	case l.ctx.Err() != nil:
+		err = errLaneStopped
+	}
+	if err != nil {
+		results := make([]laneResult, len(batch))
+		for i := range results {
+			results[i] = laneResult{Outcome: l.notSentOutcome(), Err: err}
 		}
-		l.cfg.debugf("%s lane: request body: %s", l.cfg.kind, body)
-		var resp []byte
-		l.cfg.overlap.begin(l.cfg.kind)
-		resp, err = l.client.post(l.ctx, body)
-		overlapped = l.cfg.overlap.end(l.cfg.kind)
+		l.complete(batch, results, sent, len(body), false, err, false)
+		return
+	}
+
+	if l.cfg.onSent != nil {
+		l.cfg.onSent(batch)
+	}
+	l.cfg.debugf("%s lane: request body: %s", l.cfg.kind, body)
+	l.cfg.overlap.begin(l.cfg.kind)
+	resp, err := l.client.post(l.ctx, body)
+	overlapped := l.cfg.overlap.end(l.cfg.kind)
+	if err == nil {
+		l.cfg.debugf("%s lane: response body: %s", l.cfg.kind, resp)
+		var results []laneResult
+		if l.cfg.kind == writeLane {
+			results, err = decodeWriteResponse(batch, resp)
+		} else {
+			results, err = decodeReadResponse(batch, resp)
+		}
 		if err == nil {
-			l.cfg.debugf("%s lane: response body: %s", l.cfg.kind, resp)
-			var results []laneResult
-			if l.cfg.kind == writeLane {
-				results, err = decodeWriteResponse(batch, resp)
-			} else {
-				results, err = decodeReadResponse(batch, resp)
-			}
-			if err == nil {
-				l.complete(batch, results, sent, len(body), overlapped, nil)
-				return
-			}
+			l.complete(batch, results, sent, len(body), overlapped, nil, true)
+			return
 		}
 	}
 
+	// Sent, but no usable answer: a read failed, a command may or may not have run.
 	failed := OutcomeFailed
 	if l.cfg.kind == writeLane {
 		failed = OutcomeUncertain
@@ -390,12 +412,13 @@ func (l *lane) send(batch []*laneEntry) {
 	for i := range results {
 		results[i] = laneResult{Outcome: failed, Err: err}
 	}
-	l.complete(batch, results, sent, len(body), overlapped, err)
+	l.complete(batch, results, sent, len(body), overlapped, err, true)
 }
 
 // complete stamps the results, reports the request (log line and metrics), runs the
-// completion hook per entry and delivers the outcomes.
-func (l *lane) complete(batch []*laneEntry, results []laneResult, sent time.Time, bytes int, overlapped bool, reqErr error) {
+// completion hook per entry and delivers the outcomes. wasSent is false when the request
+// never left (it could not be encoded, or the lane stopped): no request metric then.
+func (l *lane) complete(batch []*laneEntry, results []laneResult, sent time.Time, bytes int, overlapped bool, reqErr error, wasSent bool) {
 	done := time.Now()
 	stamp := l.cfg.stamps.Add(1)
 
@@ -414,14 +437,19 @@ func (l *lane) complete(batch []*laneEntry, results []laneResult, sent time.Time
 	if len(batch) == 1 {
 		ev.Clu, ev.Id = batch[0].obj.Clu, batch[0].obj.Id
 	}
-	if reqErr != nil {
+	switch {
+	case !wasSent:
+		l.cfg.logf("%s lane: request of %d items not sent: %v", l.cfg.kind, ev.Items, reqErr)
+	case reqErr != nil:
 		l.cfg.logf("%s lane: request of %d items, %d bytes failed after %d ms: %v",
 			l.cfg.kind, ev.Items, ev.Bytes, ev.HTTP.Milliseconds(), reqErr)
-	} else {
+	default:
 		l.cfg.debugf("%s lane: request of %d items, %d bytes, %d ms (queue wait %d ms, overlap %v)",
 			l.cfg.kind, ev.Items, ev.Bytes, ev.HTTP.Milliseconds(), ev.QueueWait.Milliseconds(), ev.Overlap)
 	}
-	l.cfg.metrics.Request(ev)
+	if wasSent {
+		l.cfg.metrics.Request(ev)
+	}
 
 	for i, e := range batch {
 		r := results[i]

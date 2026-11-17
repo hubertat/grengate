@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -369,5 +370,39 @@ func TestLane_StopResolvesPendingSubmissions(t *testing.T) {
 	}
 	if r := waitResult(t, l.Submit(lightCmd("DOU0001", true))[0]); r.Outcome != OutcomeError {
 		t.Errorf("submission after stop = %v, want error", r.Outcome)
+	}
+}
+
+func TestLane_StopGivesMergedSubmissionsOneStamp(t *testing.T) {
+	g := newFakeGate(t)
+	g.SetLight(tCLU, "DOU0001", false)
+	g.SetLight(tCLU, "DOU0002", false)
+	g.HangAll(fakeReadPath)
+	l := newTestLane(t, g, readLane, nil)
+	l.Submit(lightRead("DOU0001"))
+	g.WaitForRequests(t, fakeReadPath, 1)
+	merged := []<-chan laneResult{l.Submit(lightRead("DOU0002"))[0], l.Submit(lightRead("DOU0002"))[0]}
+
+	l.stop()
+	r1, r2 := waitResult(t, merged[0]), waitResult(t, merged[1])
+	if r1.Outcome != OutcomeFailed || r2.Outcome != OutcomeFailed {
+		t.Errorf("outcomes %v, %v; want failed", r1.Outcome, r2.Outcome)
+	}
+	if r1.Stamp == 0 || r1.Stamp != r2.Stamp {
+		t.Errorf("stamps %d, %d; want one stamp for the entry", r1.Stamp, r2.Stamp)
+	}
+}
+
+func TestLane_CommandThatCannotBeSentIsError(t *testing.T) {
+	g := newFakeGate(t)
+	g.SetThermo(tCLU, "THE0002", 20, 21, 0, 0)
+	l := newTestLane(t, g, writeLane, nil)
+	cmd := ReqObject{Clu: tCLU, Id: "THE0002", Kind: "Thermo", Cmd: "SET", Thermo: &Thermo{TempSetpoint: math.NaN()}}
+	r := waitResult(t, l.Submit(cmd)[0])
+	if r.Outcome != OutcomeError || r.Err == nil {
+		t.Errorf("outcome %v (%v), want error: the command was never sent", r.Outcome, r.Err)
+	}
+	if n := g.RequestCount(""); n != 0 {
+		t.Errorf("fake GATE received %d requests", n)
 	}
 }
