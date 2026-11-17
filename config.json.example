@@ -15,6 +15,18 @@
 	## devices per read request (default 30)
 	"QueryLimit": 30,
 
+	## minimum time between reads of a thermostat (default 60); thermostats not read yet are read every cycle
+	"ThermoCycleInSeconds": 60,
+
+	## write protocol: false (default) sends batched array requests with partial thermostat commands
+	## and needs the new grenton/update-script.lua on the GATE; true sends one single-object request
+	## per command with three-field thermostat commands (old script; the new script accepts it too)
+	"LegacyWriteScript": false,
+	## commands per write request (default 5) and batching window in ms (default 30);
+	## grouping only, both ignored when LegacyWriteScript is true
+	"SetterQueueSize": 5,
+	"SetterFlushMs": 30,
+
 	## no longer used; still accepted so older config files load
 	"FreshInSeconds": 5,
 

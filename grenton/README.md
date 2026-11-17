@@ -116,7 +116,7 @@ The scripts cannot run outside the GATE, so these points rest on the manual chec
 1. Deploy a grengate binary that accepts both response shapes (stage 2 or later). It works with the old and the new scripts.
 2. Deploy the new scripts (`update-script.lua`, `read-script.lua`). They work with that binary and with the stage 5 binary.
    Deploying them while a binary from before stage 2 still runs is possible, but requires manual check 1 below with that binary's own pass criteria.
-3. Only then deploy the stage 5 binary, which sends array writes and partial thermostat commands.
+3. Only then deploy the stage 5 binary, which by default (`LegacyWriteScript` false) sends array writes of up to `SetterQueueSize` commands and partial thermostat commands.
    If anything fails, set `LegacyWriteScript` to true to go back to single-object writes; the new script accepts those as well.
 
 ## Manual check on the real GATE

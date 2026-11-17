@@ -203,16 +203,17 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 
 **Work**:
 
-- [ ] `grenton/update-script.lua`: response shaped like the request, acknowledgement items with `Error`, `pcall` per item, thermostat sets only the fields present, no read-back (concept 3.7).
-- [ ] `grenton/read-script.lua`: thermostat read trimmed to current temperature, target temperature, setpoint, state and mode.
-- [ ] `grenton/README.md`: the request and response contract, and the rollout order.
+- [x] `grenton/update-script.lua`: response shaped like the request, acknowledgement items with `Error`, `pcall` per item, thermostat sets only the fields present, no read-back (concept 3.7).
+- [x] `grenton/read-script.lua`: thermostat read trimmed to current temperature, target temperature, setpoint, state and mode.
+- [x] `grenton/README.md`: the request and response contract, and the rollout order.
 - [ ] Deploy both scripts and run the manual check below against the binary from stage 4.
-- [ ] `LegacyWriteScript` switch. New protocol (default): every write request is an array, also when it holds one command, and thermostat commands are partial.
+- [x] `LegacyWriteScript` switch. New protocol (default): every write request is an array, also when it holds one command, and thermostat commands are partial.
       Legacy protocol: unchanged from stage 4. The protocol decides what a command contains; `SetterQueueSize` and `SetterFlushMs` only decide how commands are grouped.
-- [ ] Write lane batching in the new protocol: up to `SetterQueueSize` commands per request after the `SetterFlushMs` window.
-- [ ] `ThermoCycleInSeconds`: thermostats are queued in a refresh only when due; devices that are not ready are queued every cycle; devices not due count as `skipped_objects`.
+- [x] Write lane batching in the new protocol: up to `SetterQueueSize` commands per request after the `SetterFlushMs` window.
+- [x] `ThermoCycleInSeconds`: thermostats are queued in a refresh only when due; devices that are not ready are queued every cycle; devices not due count as `skipped_objects`.
 - [ ] Measure on the real installation and record the results in `README.md`: write request duration against item count, queue wait, lane overlap, shutter position error on partial moves. Adjust `SetterQueueSize`, `SetterFlushMs` and `QueryLimit` defaults from them.
-- [ ] Final documentation: `README.md`, `config.json.example`, the architecture section of `CLAUDE.md`. Remove this file.
+- [x] Final documentation: `README.md`, `config.json.example`, the architecture section of `CLAUDE.md`.
+- [ ] Remove this file (kept while the deploy, manual check and measurement items above are open).
 
 **Success Criteria**:
 
@@ -244,7 +245,7 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 3. Send a command for a device id that does not exist on the CLU and confirm the log shows a per-item error while the rest of the batch is applied.
 4. If anything fails, set `LegacyWriteScript` to true to return to single-object writes. The new script accepts those as well.
 
-**Status**: Not Started
+**Status**: Code complete; pending on the real GATE: deploy the scripts and run the manual check, measurements and default tuning (then remove this file)
 
 ---
 
