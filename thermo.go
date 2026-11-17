@@ -64,9 +64,11 @@ func (gt *Thermo) AppendHk() *accessory.Thermostat {
 	gt.hk.Id = gt.GetLongId()
 
 	// Three-field commands (legacy write protocol) need setpoint, state and mode: writes are
-	// refused until the thermostat was read (concept 3.5).
-	gt.hk.Thermostat.TargetHeatingCoolingState.SetValueRequestFunc = gt.writeGuard("mode change")
-	gt.hk.Thermostat.TargetTemperature.SetValueRequestFunc = gt.writeGuard("temperature change")
+	// refused until the thermostat was read (concept 3.5). Partial commands need nothing.
+	if gt.clu.set.LegacyWriteScript {
+		gt.hk.Thermostat.TargetHeatingCoolingState.SetValueRequestFunc = gt.writeGuard("mode change")
+		gt.hk.Thermostat.TargetTemperature.SetValueRequestFunc = gt.writeGuard("temperature change")
+	}
 	gt.hk.Thermostat.TargetHeatingCoolingState.OnValueRemoteUpdate(gt.SetState)
 	gt.hk.Thermostat.TargetTemperature.OnValueRemoteUpdate(gt.SetTemperature)
 	gt.guardReads(gt.hk.A)
@@ -103,15 +105,20 @@ func hkHeatingCoolingStates(state, mode int) (current, target int) {
 	}
 }
 
-// commandLocked builds the write payload (all three fields, as the current script needs)
-// from a copy of the device state. Call with gt.mu held.
-func (gt *Thermo) commandLocked() ReqObject {
+// commandLocked builds the command for a change from HomeKit. In the new write protocol it
+// carries only the changed fields; in the legacy protocol all three fields the old script
+// sets, from a copy of the device state (which already holds the change). Call with gt.mu
+// held.
+func (gt *Thermo) commandLocked(change ThermoPayload) ReqObject {
 	req := gt.Req
-	req.Thermo = &ThermoPayload{
-		TempSetpoint: ptr(gt.TempSetpoint),
-		State:        ptr(gt.State),
-		Mode:         ptr(gt.Mode),
+	if gt.clu.set.LegacyWriteScript {
+		change = ThermoPayload{
+			TempSetpoint: ptr(gt.TempSetpoint),
+			State:        ptr(gt.State),
+			Mode:         ptr(gt.Mode),
+		}
 	}
+	req.Thermo = &change
 	return req
 }
 
@@ -119,37 +126,40 @@ func (gt *Thermo) commandLocked() ReqObject {
 // and command snapshot under the device lock, no waiting for the GATE.
 func (gt *Thermo) SetTemperature(temp float64) {
 	gt.mu.Lock()
-	if !gt.ready { // refused by writeGuard; never send a command built on unknown values
+	if gt.clu.set.LegacyWriteScript && !gt.ready { // refused by writeGuard; never send a command built on unknown values
 		gt.mu.Unlock()
 		return
 	}
 	gt.TempSetpoint = temp
 	gt.TempTarget = temp // what HomeKit shows as the target until the confirm read
-	gt.submitCommandLocked(gt.commandLocked())
+	gt.submitCommandLocked(gt.commandLocked(ThermoPayload{TempSetpoint: ptr(temp)}))
 	gt.mu.Unlock()
 	gt.clu.set.hkSync.mark(gt) // see hkSyncer: a sync in progress may have overwritten the write
 }
 
 // SetState is the HomeKit write of the target heating/cooling state (rule 1): off, heat
 // (State 1, Mode 0) or auto (State 1, Mode 1); cool is not supported and switches off.
-// Off keeps the mode. The confirm read brings HomeKit to the resulting state.
+// Off keeps the mode: its partial command carries State only. The confirm read brings
+// HomeKit to the resulting state.
 func (gt *Thermo) SetState(state int) {
 	gt.mu.Lock()
-	if !gt.ready { // refused by writeGuard
+	if gt.clu.set.LegacyWriteScript && !gt.ready { // refused by writeGuard
 		gt.mu.Unlock()
 		return
 	}
+	var change ThermoPayload
 	switch state {
 	case characteristic.TargetHeatingCoolingStateHeat:
-		gt.State = 1
-		gt.Mode = 0
+		gt.State, gt.Mode = 1, 0
+		change = ThermoPayload{State: ptr(1), Mode: ptr(0)}
 	case characteristic.TargetHeatingCoolingStateAuto:
-		gt.State = 1
-		gt.Mode = 1
+		gt.State, gt.Mode = 1, 1
+		change = ThermoPayload{State: ptr(1), Mode: ptr(1)}
 	default:
 		gt.State = 0
+		change = ThermoPayload{State: ptr(0)}
 	}
-	gt.submitCommandLocked(gt.commandLocked())
+	gt.submitCommandLocked(gt.commandLocked(change))
 	gt.mu.Unlock()
 	gt.clu.set.hkSync.mark(gt) // see hkSyncer: a sync in progress may have overwritten the write
 }

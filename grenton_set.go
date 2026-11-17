@@ -36,6 +36,16 @@ type GrentonSet struct {
 	// InfluxDB is the optional metrics reporting (off by default).
 	InfluxDB InfluxConfig
 
+	// LegacyWriteScript selects the write protocol (concept 3.7). false (default): every
+	// write request is a JSON array, also with one command, and thermostat commands carry
+	// only the changed fields; this needs the new update-script.lua. true: one single-object
+	// request per command and three-field thermostat commands, which the old script
+	// understands (and the new one accepts).
+	LegacyWriteScript bool
+	// SetterQueueSize is the most commands one write request carries (default 5). It only
+	// decides grouping, never what a command contains. Ignored with LegacyWriteScript.
+	SetterQueueSize int
+
 	cycleDuration time.Duration
 	// clock drives the refresh scheduler (nil: real time).
 	clock clock
@@ -157,21 +167,7 @@ func (gs *GrentonSet) startWorkers() {
 	})
 	gs.reader.start()
 
-	// Legacy write protocol (the script deployed today): one single-object command per request.
-	gs.writer = newLane(laneConfig{
-		kind:       writeLane,
-		url:        gs.GetSetPath(),
-		timeout:    gs.requestTimeout,
-		maxItems:   1,
-		asArray:    false,
-		merge:      mergeCommand,
-		stamps:     &gs.stamps,
-		overlap:    &gs.overlap,
-		metrics:    gs.metrics,
-		logf:       gs.Logf,
-		debugf:     gs.Debugf,
-		onComplete: gs.writeCompleted,
-	})
+	gs.writer = newLane(gs.writeLaneConfig())
 	gs.writer.start()
 
 	clk := gs.shutterClock
@@ -182,6 +178,38 @@ func (gs *GrentonSet) startWorkers() {
 		sh.sim.start(clk)
 	}
 }
+
+// writeLaneConfig returns the write lane's configuration for the selected protocol. The
+// protocol decides the request shape (and, in Thermo, what a command contains);
+// SetterQueueSize only decides how many commands share a request.
+func (gs *GrentonSet) writeLaneConfig() laneConfig {
+	cfg := laneConfig{
+		kind:       writeLane,
+		url:        gs.GetSetPath(),
+		timeout:    gs.requestTimeout,
+		merge:      mergeCommand,
+		stamps:     &gs.stamps,
+		overlap:    &gs.overlap,
+		metrics:    gs.metrics,
+		logf:       gs.Logf,
+		debugf:     gs.Debugf,
+		onComplete: gs.writeCompleted,
+	}
+	if gs.LegacyWriteScript {
+		cfg.maxItems, cfg.asArray = 1, false
+		gs.Logf("write protocol: legacy (one single-object request per command, three-field thermostat commands)")
+		return cfg
+	}
+	if gs.SetterQueueSize <= 0 {
+		gs.SetterQueueSize = defaultSetterQueueSize
+	}
+	cfg.maxItems, cfg.asArray = gs.SetterQueueSize, true
+	gs.Logf("write protocol: array requests of up to %d commands, partial thermostat commands", cfg.maxItems)
+	return cfg
+}
+
+// Defaults of the optional write tuning fields.
+const defaultSetterQueueSize = 5
 
 // shutters returns every configured shutter.
 func (gs *GrentonSet) shutters() []*Shutter {

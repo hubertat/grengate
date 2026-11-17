@@ -109,6 +109,9 @@ func newTestSetWith(t testing.TB, configure func(gs *GrentonSet), clus ...*Clu) 
 		QueryLimit:    30,
 		cycleDuration: 10 * time.Second,
 		Clus:          clus,
+		// The tests of stages 2 to 4 were written against the legacy write protocol;
+		// protocol tests select the new one (withNewProtocol).
+		LegacyWriteScript: true,
 	}
 	if configure != nil {
 		configure(gs)

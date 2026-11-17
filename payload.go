@@ -12,7 +12,8 @@ type LightPayload struct {
 }
 
 // ThermoPayload is the payload of a thermostat. A read result carries every field; a
-// command carries TempSetpoint, State and Mode (the fields update-script.lua sets).
+// command carries some of TempSetpoint, State and Mode (the fields update-script.lua sets):
+// only the changed ones in the new write protocol, all three in the legacy one.
 // Fields of the read script that grengate does not use (TempMin, TempMax, TempHoliday) are
 // not decoded.
 type ThermoPayload struct {
