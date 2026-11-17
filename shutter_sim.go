@@ -186,6 +186,9 @@ type shutterSim struct {
 	// stamp does not change it.
 	belief      motorState
 	beliefStamp uint64
+	// otherStamp is the stamp of the newest evidence known to show the motor doing something
+	// else than believed now: as far as known, the believed state holds since after it.
+	otherStamp uint64
 	// lastObs is the newest observation.
 	lastObs observation
 	// uncertainStamp is the completion stamp of the newest uncertain result, of any
@@ -447,9 +450,13 @@ func (s *shutterSim) handleResult(c *shutterCommand, r laneResult) {
 		return
 	}
 	// A late acknowledgement: the command ran, but newer evidence says what the motor does
-	// now. If that is the movement this command started (an observation saw it first), the
-	// movement is the command's.
-	if m != motorStopped && m == s.belief && s.moveGen == 0 {
+	// now. If that is the movement this command started (an observation saw it first, and
+	// nothing showed the motor doing anything else since the command ran), the movement is
+	// the command's, unless a newer generation's command already claimed it.
+	switch {
+	case m != s.belief:
+		s.otherStamp = max(s.otherStamp, c.stamp)
+	case m != motorStopped && c.stamp > s.otherStamp && (s.moveGen == 0 || s.moveGen < c.gen):
 		s.claim(c.gen)
 	}
 }
@@ -494,10 +501,12 @@ func (s *shutterSim) reconcile(seen motorState) {
 // setBelief applies evidence with the given completion stamp (newer than beliefStamp). A
 // changed belief belongs to no generation until an acknowledgement claims it.
 func (s *shutterSim) setBelief(m motorState, stamp uint64) {
-	s.beliefStamp = stamp
 	if m == s.belief {
+		s.beliefStamp = stamp
 		return
 	}
+	s.otherStamp = s.beliefStamp
+	s.beliefStamp = stamp
 	s.sh.clu.set.Debugf("shutter %s: motor believed %v (was %v)", describeDevice(s.sh), m, s.belief)
 	s.belief = m
 	s.moveGen = 0

@@ -82,6 +82,13 @@ func (s *shutterSim) idle() bool {
 	return len(s.inbox) == 0 && !s.handling && s.outstanding == 0
 }
 
+// waitingFor returns how many submitted commands' results are not handled yet.
+func (s *shutterSim) waitingFor() int {
+	s.imu.Lock()
+	defer s.imu.Unlock()
+	return s.outstanding
+}
+
 // inboxHandled reports whether everything posted so far is handled (results of commands
 // may still be outstanding).
 func (s *shutterSim) inboxHandled() bool {
@@ -1103,4 +1110,138 @@ func TestShutter_RetargetAfterUndecidedReverseSubmitsMove(t *testing.T) {
 	settle(t, gs)
 	assertShown(t, sh, shown{30, 30, hkStopped})
 	assertCmds(t, g, "MOVEDOWN", "MOVEUP", "MOVEDOWN", "STOP")
+}
+
+// A late acknowledgement of the latest generation's move in the direction an older
+// generation's movement already goes claims the movement: two MOVEDOWNs both run, the newer
+// one's acknowledgement is handled after its confirm read (which kept the belief "moving
+// down", the older generation's), and the clock then runs to the newer target and stops there.
+func TestShutter_LateAckOfLatestGenerationClaimsMovement(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	release := make(chan struct{})
+	sh.sim.resultHook = func(c *shutterCommand, _ laneResult) {
+		if c.cmd == "MOVEDOWN" && c.gen == 2 {
+			<-release
+		}
+	}
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 40)
+	h.Wait(t)
+	hkTarget(t, sh, 20)
+	eventually(t, 2*time.Second, func() bool { return queuedIn(gs.writer, tSID) && sh.sim.inboxHandled() }, "the second MOVEDOWN queued")
+	h.Release()
+	eventually(t, 2*time.Second, func() bool {
+		return gs.writer.idle() && gs.reader.idle() && sh.sim.inboxHandled() && g.RequestCount(fakeReadPath) == 2
+	}, "the confirm read to be handled")
+	close(release)
+	settle(t, gs)
+	tick(t, gs, 80)
+	settle(t, gs)
+	assertShown(t, sh, shown{20, 20, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "MOVEDOWN", "STOP")
+}
+
+// A late acknowledgement does not claim a movement that started after a newer read showed
+// the motor stopped: MOVEDOWN ran, the confirm read showed it stopped again, a later poll
+// shows a wall switch moving it down, and only then is MOVEDOWN's acknowledgement handled.
+// That movement is not MOVEDOWN's: the clock does not run.
+func TestShutter_LateAckDoesNotClaimMovementAfterObservedStop(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	release := make(chan struct{})
+	sh.sim.resultHook = func(c *shutterCommand, _ laneResult) {
+		if c.cmd == "MOVEDOWN" {
+			<-release
+		}
+	}
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 40)
+	h.Wait(t)
+	g.SetShutter(tCLU, tSID, 20000, 0) // stopped before the confirm read
+	h.Release()
+	eventually(t, 2*time.Second, func() bool {
+		return gs.writer.idle() && gs.reader.idle() && sh.sim.inboxHandled() && g.RequestCount(fakeReadPath) == 2
+	}, "the confirm read to be handled")
+	g.SetShutter(tCLU, tSID, 20000, 2) // a wall switch
+	gs.Refresh()
+	eventually(t, 2*time.Second, sh.sim.inboxHandled, "the poll to be handled")
+	close(release)
+	settle(t, gs)
+	assertShown(t, sh, shown{100, 40, hkDecreasing})
+	if clk.running() {
+		t.Error("the late acknowledgement claimed a movement it did not start")
+	}
+	assertCmds(t, g, "MOVEDOWN")
+}
+
+// A late acknowledgement of an older generation does not take the movement from a newer
+// generation that claimed it: the first MOVEDOWN's acknowledgement is handled after the
+// second's; the second generation still stops at its target.
+func TestShutter_LateAckOfOlderGenerationLeavesNewerClaim(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	release := make(chan struct{})
+	sh.sim.resultHook = func(c *shutterCommand, _ laneResult) {
+		if c.gen == 1 {
+			<-release
+		}
+	}
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 40)
+	h.Wait(t)
+	hkTarget(t, sh, 20)
+	eventually(t, 2*time.Second, func() bool { return queuedIn(gs.writer, tSID) && sh.sim.inboxHandled() }, "the second MOVEDOWN queued")
+	h.Release()
+	eventually(t, 2*time.Second, func() bool {
+		return gs.writer.idle() && gs.reader.idle() && sh.sim.inboxHandled() && g.RequestCount(fakeReadPath) == 2
+	}, "the second MOVEDOWN and its confirm read to be handled")
+	close(release)
+	settle(t, gs)
+	tick(t, gs, 80)
+	settle(t, gs)
+	assertShown(t, sh, shown{20, 20, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "MOVEDOWN", "STOP")
+}
+
+// A late STOP acknowledgement is evidence that the motor stopped after the older MOVEDOWN:
+// MOVEDOWN (target 40) and the user's STOP both run, both acknowledgements are handled
+// late, after a read that shows a wall switch moving the shutter down. Neither claims that
+// movement.
+func TestShutter_LateStopAckBreaksOlderMovement(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, clk := readyShutter(t)
+	moveTo(t, gs, sh, 50)
+	releaseMove, releaseStop := make(chan struct{}), make(chan struct{})
+	sh.sim.resultHook = func(c *shutterCommand, _ laneResult) {
+		switch c.cmd {
+		case "MOVEDOWN":
+			<-releaseMove
+		case "STOP":
+			<-releaseStop
+		}
+	}
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 40)
+	h.Wait(t)
+	hs := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 50) // the position: STOP
+	eventually(t, 2*time.Second, sh.sim.inboxHandled, "the STOP to be submitted")
+	h.Release()
+	hs.Wait(t)                         // MOVEDOWN acknowledged (late), STOP ran
+	g.SetShutter(tCLU, tSID, 20000, 2) // a wall switch, before the confirm read
+	hs.Release()
+	eventually(t, 2*time.Second, func() bool {
+		return gs.writer.idle() && gs.reader.idle() && sh.sim.inboxHandled() && g.RequestCount(fakeReadPath) == 4
+	}, "the confirm read of the STOP to be handled")
+	close(releaseStop)
+	eventually(t, 2*time.Second, func() bool { return sh.sim.inboxHandled() && sh.sim.waitingFor() == 1 },
+		"the STOP acknowledgement to be handled")
+	close(releaseMove)
+	settle(t, gs)
+	assertShown(t, sh, shown{50, 50, hkDecreasing})
+	if clk.running() {
+		t.Error("a late acknowledgement claimed the wall switch's movement")
+	}
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "STOP")
 }
