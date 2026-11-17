@@ -1,13 +1,9 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
-	"time"
 )
 
 type ReqObject struct {
@@ -67,42 +63,6 @@ func (co *CluObject) GetLongId() uint64 {
 
 func (co *CluObject) GetMixedId() string {
 	return fmt.Sprintf("%s%04d", co.Kind, co.Id)
-}
-
-func (co *CluObject) TestGrentonGate(ro ReqObject) bool {
-	co.clu.block.Lock()
-	defer co.clu.block.Unlock()
-
-	jsonQ, err := json.Marshal(ro)
-	if err != nil {
-		co.clu.set.Logf("TestGrentonGate failed (json) for CluObject: %s | %s", co.Name, co.GetMixedId())
-		return false
-	}
-
-	req, err := http.NewRequest("POST", co.clu.set.Host+co.clu.set.SetLightPath, bytes.NewBuffer(jsonQ))
-	if err != nil {
-		co.clu.set.Logf("TestGrentonGate failed (request) for CluObject: %s | %s", co.Name, co.GetMixedId())
-		return false
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	client := http.Client{
-		Timeout: 10 * time.Second,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		co.clu.set.Logf("TestGrentonGate failed (client.Do) for CluObject: %s | %s", co.Name, co.GetMixedId())
-		return false
-	}
-
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
-		co.clu.set.Logf("TestGrentonGate failed (%s) for CluObject: %s | %s", resp.Status, co.Name, co.GetMixedId())
-		return false
-	}
-
-	return true
 }
 
 // sendCommand submits a command to the write lane and waits for its result (HomeKit

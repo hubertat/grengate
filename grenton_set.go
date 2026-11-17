@@ -260,32 +260,3 @@ func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.A) {
 
 	return
 }
-
-// TestAllGrentonGate iterates every object and checks individually if request is success http code
-func (gs *GrentonSet) TestAllGrentonGate() {
-	gs.Logf("GrentonSet TestAllGrentonGate: Performing Grenton GATE test for all")
-	for _, clu := range gs.Clus {
-		for _, light := range clu.Lights {
-			if !light.TestGrentonGate(light.Req) {
-				gs.Logf("GrentonSet TestAllGrentonGate: Test failed for %s|%s, waiting and repeating", light.Name, light.GetMixedId())
-				time.Sleep(3 * time.Second)
-				if !light.TestGrentonGate(light.Req) {
-					gs.Logf("GrentonSet TestAllGrentonGate: Test failed again (%s|%s), removing from clu/set", light.Name, light.GetMixedId())
-					light = nil
-				}
-			}
-		}
-
-		for _, light := range clu.Therms {
-			if !light.TestGrentonGate(light.Req) {
-				gs.Logf("GrentonSet TestAllGrentonGate: Test failed for %s|%s, waiting and repeating", light.Name, light.GetMixedId())
-				time.Sleep(3 * time.Second)
-				if !light.TestGrentonGate(light.Req) {
-					gs.Logf("GrentonSet TestAllGrentonGate: Test failed again (%s|%s), removing from clu/set", light.Name, light.GetMixedId())
-					light = nil
-				}
-			}
-		}
-	}
-	gs.Logf("GrentonSet TestAllGrentonGate: GATE test finished")
-}

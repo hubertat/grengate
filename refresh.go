@@ -87,8 +87,7 @@ func describeDevice(d device) string {
 // complete, whatever its outcome; the request timeout bounds how long that takes.
 func (gs *GrentonSet) startup(ctx context.Context, autotest bool) {
 	if autotest {
-		gs.Logf("Testing all Grenton elements")
-		gs.TestAllGrentonGate()
+		gs.Autotest()
 	}
 	clk := gs.clock
 	if clk == nil {
