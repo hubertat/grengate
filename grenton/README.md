@@ -119,7 +119,7 @@ The scripts cannot run outside the GATE, so these points rest on the manual chec
 
 - `pcall` is available in the GATE's Lua and catches errors raised by `execute()`.
 - Whether `execute()` raises for an object id that does not exist on a known CLU. If it does not, such a command is acknowledged without effect, and only its confirm read (missing item) shows the problem.
-  If it does, the item gets `Error` with `Uncertain` (the GATE had called the CLU). Step 3 of the manual check shows which applies; an unknown CLU always gives a per-item `Error` without `Uncertain`.
+  If it does, the item gets `Error` with `Uncertain` (the GATE had called the CLU). Step 3 of the manual check records which applies; an unknown CLU always gives a per-item `Error` without `Uncertain`.
 - Which errors `execute()` raises when a CLU does not answer, and whether the CLU may have acted by then. grengate treats every such error as uncertain.
 
 ## Rollout order
@@ -137,5 +137,7 @@ The scripts cannot run outside the GATE, so these points rest on the manual chec
    - Before stage 2: each command takes effect and the HomeKit request returns within a round trip, with no hang.
      The log line "Unmarshal data error" after each write is expected with that binary. Any other error, or a request that does not return, is a failure.
 2. After deploying the stage 5 binary: run a scene with at least six lights and confirm in the log that they left in batched requests.
-3. Send a command for a device id that does not exist on the CLU and confirm the log shows a per-item error while the rest of the batch is applied.
+3. Add a light on a CLU id that does not exist on the GATE (for example `CLU_nope`) to the configuration, switch it together with real lights in one scene,
+   and confirm the log shows a per-item error ("unknown CLU") for it while the rest of the batch is applied.
+   Then do the same with a light id that does not exist on a real CLU and record what happens (no error, or an error marked uncertain): this is an observation for the "Not verifiable from Go" list above, not a pass criterion.
 4. If anything fails, set `LegacyWriteScript` to true.

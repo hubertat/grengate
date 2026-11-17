@@ -242,7 +242,9 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
    - Before stage 2: each command takes effect and the HomeKit request returns within a round trip, with no hang.
      The log line "Unmarshal data error" after each write is expected here: that binary reports every successful write this way, with the old script as well. Any other error, or a request that does not return, is a failure.
 2. After deploying the stage 5 binary: run a scene with at least six lights and confirm in the log that they left in batched requests.
-3. Send a command for a device id that does not exist on the CLU and confirm the log shows a per-item error while the rest of the batch is applied.
+3. Add a light on a CLU id that does not exist on the GATE to the configuration, switch it together with real lights in one scene,
+   and confirm the log shows a per-item error ("unknown CLU") for it while the rest of the batch is applied.
+   Then switch a light whose id does not exist on a real CLU and record what happens (no error, or an error marked uncertain); this is an observation to record in `grenton/README.md`, not a pass criterion.
 4. If anything fails, set `LegacyWriteScript` to true to return to single-object writes. The new script accepts those as well.
 
 **Status**: Code complete; pending on the real GATE: deploy the scripts and run the manual check, measurements and default tuning (then remove this file)
