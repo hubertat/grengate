@@ -164,13 +164,13 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 
 **Work**:
 
-- [ ] Shutter goroutine with one inbox for new targets, command results, read observations and clock ticks. The clock is injected so tests control time.
-- [ ] Belief, movement generation and the clock rules. Evidence is applied by completion stamp.
-- [ ] Automatic `STOP` at the target, issued by the latest generation only.
-- [ ] "Did not run" detection, one retry, and giving up with the HomeKit target set to where the motor ends up.
-- [ ] Reconciliation after an uncertain outcome, per the table in concept 3.4.
-- [ ] Shutter readiness: a usable `MaxTime` (at least 100 ms). Replaces the stage 1 guard.
-- [ ] Remove `moveLoop`, `cancelMovement`, `looping` and `moveTicker`.
+- [x] Shutter goroutine with one inbox for new targets, command results, read observations and clock ticks. The clock is injected so tests control time.
+- [x] Belief, movement generation and the clock rules. Evidence is applied by completion stamp.
+- [x] Automatic `STOP` at the target, issued by the latest generation only.
+- [x] "Did not run" detection, one retry, and giving up with the HomeKit target set to where the motor ends up.
+- [x] Reconciliation after an uncertain outcome, per the table in concept 3.4.
+- [x] Shutter readiness: a usable `MaxTime` (at least 100 ms). Replaces the stage 1 guard.
+- [x] Remove `moveLoop`, `cancelMovement`, `looping` and `moveTicker`.
 
 **Success Criteria**:
 
@@ -193,7 +193,7 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 - Externally observed stop ends the simulation.
 - Move refused while `MaxTime` is unknown.
 
-**Status**: Not Started
+**Status**: Complete
 
 ---
 

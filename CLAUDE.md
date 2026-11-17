@@ -85,7 +85,7 @@ Configuration is JSON-based. See `config.json.example` for structure:
 4. **Device Types** - Each implements HomeKit accessories
    - **Light** (`light.go`): Binary on/off DOUT devices. `HkType` selects the HomeKit accessory: `Lightbulb` (default) or `Outlet`; the Grenton side (Kind `Light`) is identical for both
    - **Thermo** (`thermo.go`): Thermostats with target/current temperature
-   - **Shutter** (`shutter.go`): Window coverings with position control and simulated movement
+   - **Shutter** (`shutter.go`, `shutter_sim.go`): Window coverings with a simulated position (concept 3.4). Grenton reports only the motor state (`State` 0 stopped, 1 up, 2 down; position 100 = open, start position 100). `SetPosition` (TargetPosition callback; `writeGuard("move")` refuses it until a read gave a usable `MaxTime` >= 100 ms) records the target, starts a movement generation (`targetGen`) and posts it to the shutter's simulation goroutine; it never waits. The goroutine (`shutterSim.run`) has one inbox (targets, command results forwarded by one small goroutine per command, read observations posted by `applyRead` with their completion stamp, clock ticks); posting never blocks. It keeps a **belief** (motor stopped/up/down) changed only by evidence with a newer completion stamp (an acknowledgement of any generation's command, or an observation), and **authority** with the latest generation: only it submits the automatic `STOP` at its target (after its move was acknowledged; an end-stop target 0/100 first runs a full travel time), only its commands are retried (per-item error: once, then given up with the HomeKit target set to where the motor ends up), and its uncertain outcomes are reconciled by the next read (concept 3.4 tables). The clock (`timerClock`, one step = MaxTime/100, injected as `GrentonSet.shutterClock`) runs while the motor is believed moving by our command: to the latest target, else to the end stop; a wall-switch movement shows in HomeKit but does not move the position. A believed stop with nothing pending ends the simulation (target := position). Goroutines start in `startWorkers` and stop first in `Stop`; `startup()` waits for them (`flushed`) before HomeKit starts
    - **MotionSensor** (`motion_sensor.go`): Binary motion detection
 
 5. **CluObject** (`clu_object.go`) - Base struct for all devices
@@ -112,8 +112,8 @@ Configuration is JSON-based. See `config.json.example` for structure:
 5. One refresh runs at startup before the HomeKit server (`startup()`); after `hap.NewServer`, `startCycling()` starts `refreshScheduler` (`scheduler.go`), which runs one refresh per cycle boundary, skipping boundaries that pass during a refresh
 
 **Writing State:**
-1. hap calls the characteristic's `SetValueRequestFunc` (thermostat: `writeGuard` refuses while not ready), stores the value, then the `OnValueRemoteUpdate` callback (e.g., `Light.Set()`)
-2. Under the device lock the callback sets the optimistic state, builds a command snapshot (payload values, never a pointer to the device) and calls `submitCommandLocked()`; it returns without waiting (the shutter still waits until stage 4)
+1. hap calls the characteristic's `SetValueRequestFunc` (thermostat and shutter: `writeGuard` refuses while not ready), stores the value, then the `OnValueRemoteUpdate` callback (e.g., `Light.Set()`)
+2. Under the device lock the callback sets the optimistic state, builds a command snapshot (payload values, never a pointer to the device) and calls `submitCommandLocked()`; it returns without waiting and marks the device for a HomeKit sync. The shutter callback only records the target and posts it to its simulation goroutine, which submits `MOVEUP`/`MOVEDOWN`/`STOP` (`Cmd`, no payload) under the device lock and gets each result back through its inbox
 3. The write lane POSTs it as a single object to `SetLightPath`; the response is an acknowledgement only (`decodeWriteResponse`, both response shapes) and is never loaded as state
 4. The write completion hook (`writeCompleted`) logs the outcome, finishes the command for each device that submitted it (`ReqObject.owners`, kept through mailbox merges): bumps the generation (rule 2) and, if it was the device's latest command (`cmdSeq`), clears `busy` and queues a confirm read (rule 5), which restores the real state after a failed write
 
@@ -139,14 +139,14 @@ Configuration is JSON-based. See `config.json.example` for structure:
 2. **Periodic Refresh**: fixed cycle boundaries, no `time.Ticker`, one refresh at a time
 3. **Mixed IDs**: Devices use "KIND####" format (e.g., "DOU0001") as unique identifiers within CLUs
 4. **Metrics** (`metrics.go`, `influx.go`): `Metrics` interface (request, command, refresh events), no-op by default, InfluxDB v2 line protocol when configured
-5. **Shutter Simulation**: Shutters simulate movement progress with tickers since Grenton doesn't provide position feedback
+5. **Shutter Simulation** (concept 3.4): one goroutine per shutter, driven by command results, read observations (ordered by completion stamp) and an injected clock, since Grenton doesn't provide position feedback
 
 ## Development Notes
 
-- **Tests**: `go test -race ./...`. `fakegate_test.go` is a fake GATE (API described at the top of the file); `helpers_test.go` has `newTestSet`/`newTestClu` (a `GrentonSet` wired to it without a config file), `captureLog`, `eventually`, `settle` (both lanes idle and HomeKit synced); `light_test.go` has `findC`; `write_test.go` has `hkWrite`; `ordering_test.go` has `recordSyncs`, `hkWriteAsync`, `queuedIn`
+- **Tests**: `go test -race ./...`. `fakegate_test.go` is a fake GATE (API described at the top of the file); `helpers_test.go` has `newTestSet`/`newTestClu` (a `GrentonSet` wired to it without a config file), `captureLog`, `eventually`, `settle` (shutter simulations idle, both lanes idle and HomeKit synced; `quiet`); `newTestSetWith` gives every set a `fakeTimers` shutter clock, so shutters never tick unless a test fires the clock; `light_test.go` has `findC`; `write_test.go` has `hkWrite`; `ordering_test.go` has `recordSyncs`, `hkWriteAsync`, `queuedIn`; `shutter_test.go` has `fakeTimers`, `readyShutter`, `hkTarget`, `tick`, `moveTo`, `assertShown`, `assertCmds`, `checkGoroutines` (goroutine leak check, call first) and `shutterSim.resultHook` to delay a command's result
 - **Logging**: Use `GrentonSet.Logf()` for normal logs, `Debugf()` for verbose (controlled by Verbose config)
 - **Error Handling**: Errors logged via `GrentonSet.Error()`, often with `pkg/errors.Wrap/Wrapf`
-- **Concurrency**: device state behind `CluObject.mu`; lane mailboxes behind their own mutex, never held during HTTP
+- **Concurrency**: device state behind `CluObject.mu`; lane mailboxes behind their own mutex, never held during HTTP; a shutter simulation's inbox behind a leaf mutex (posted to with the device lock held), its state owned by its goroutine
 - **Timeout**: every GATE request is bounded by `GrentonSet.requestTimeout` (default 10 s, tests shorten it)
 - **Version**: `Version`, `GitCommit` and `BuildDate` variables in `main.go`, set via ldflags at build time (`--version` prints them)
 
