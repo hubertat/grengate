@@ -1050,3 +1050,57 @@ func TestShutter_RealClockReachesTarget(t *testing.T) {
 	assertShown(t, sh, shown{90, 90, hkStopped})
 	assertCmds(t, g, "MOVEDOWN", "STOP")
 }
+
+// A same-direction retarget takes the movement over only when the belief is backed by
+// evidence: while an uncertain outcome is undecided the new generation submits its move.
+// Here the automatic STOP at 40 ran but was answered 500 and its confirm read failed, so
+// the motor is still believed moving down; the user then asks for 20.
+func TestShutter_RetargetAfterUndecidedStopSubmitsMove(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 59)
+	g.FailNext(fakeReadPath, 500, 1)
+	h := g.HoldNext(fakeSetPath)
+	tick(t, gs, 1)
+	h.Wait(t)
+	h.ReleaseWithStatus(500) // the STOP ran: the motor stopped at 40
+	settle(t, gs)
+	assertShown(t, sh, shown{40, 40, hkDecreasing})
+
+	hkTarget(t, sh, 20)
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN")
+	tick(t, gs, 20)
+	settle(t, gs)
+	assertShown(t, sh, shown{20, 20, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "STOP", "MOVEDOWN", "STOP")
+}
+
+// The same for an undecided command of an older generation: a retarget's MOVEUP ran but was
+// answered 500 and its confirm read failed, the motor is still believed moving down (the
+// older movement); the user then asks to go down to 30. The MOVEDOWN is sent.
+func TestShutter_RetargetAfterUndecidedReverseSubmitsMove(t *testing.T) {
+	checkGoroutines(t)
+	gs, g, sh, _ := readyShutter(t)
+	hkTarget(t, sh, 40)
+	settle(t, gs)
+	tick(t, gs, 10)
+	g.FailNext(fakeReadPath, 500, 1)
+	h := g.HoldNext(fakeSetPath)
+	hkTarget(t, sh, 95)
+	h.Wait(t)
+	h.ReleaseWithStatus(500) // the MOVEUP ran: the motor moves up
+	settle(t, gs)
+	assertShown(t, sh, shown{90, 95, hkDecreasing})
+
+	hkTarget(t, sh, 30)
+	settle(t, gs)
+	assertCmds(t, g, "MOVEDOWN", "MOVEUP", "MOVEDOWN")
+	assertShown(t, sh, shown{90, 30, hkDecreasing})
+	tick(t, gs, 60)
+	settle(t, gs)
+	assertShown(t, sh, shown{30, 30, hkStopped})
+	assertCmds(t, g, "MOVEDOWN", "MOVEUP", "MOVEDOWN", "STOP")
+}

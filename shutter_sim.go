@@ -188,6 +188,10 @@ type shutterSim struct {
 	beliefStamp uint64
 	// lastObs is the newest observation.
 	lastObs observation
+	// uncertainStamp is the completion stamp of the newest uncertain result, of any
+	// generation. Until evidence with a higher stamp is applied (undecided), the belief may
+	// not be what the motor does.
+	uncertainStamp uint64
 	// moveGen is the generation the believed movement belongs to: the generation of the
 	// command whose acknowledgement started it (or that took it over). 0: not ours.
 	moveGen uint64
@@ -363,8 +367,10 @@ func (s *shutterSim) handle(ev simEvent) {
 // handleTarget starts a new movement generation for a HomeKit target. From standstill, or
 // against the believed movement, the generation submits its command (MOVEUP, MOVEDOWN, or
 // STOP when the target is the position); a command still waiting in the write mailbox is
-// replaced by it. If the motor already moves towards the target and no command could change
-// that, the movement simply becomes the new generation's.
+// replaced by it. If the motor already moves towards the target, no command could change
+// that and no uncertain outcome leaves that in doubt, the movement simply becomes the new
+// generation's. Otherwise the new command's result decides, whatever an older uncertain
+// command did.
 func (s *shutterSim) handleTarget(n uint64, target int) {
 	s.gen = generation{n: n, target: target}
 	cmd := cmdStop
@@ -375,7 +381,7 @@ func (s *shutterSim) handleTarget(n uint64, target int) {
 		cmd = cmdDown
 	}
 	c := &shutterCommand{cmd: cmd, gen: n}
-	if m := c.motor(); m != motorStopped && m == s.belief && len(s.cmds) == 0 {
+	if m := c.motor(); m != motorStopped && m == s.belief && len(s.cmds) == 0 && !s.undecided() {
 		s.claim(n)
 		return
 	}
@@ -421,6 +427,7 @@ func (s *shutterSim) handleResult(c *shutterCommand, r laneResult) {
 		}
 		return
 	case OutcomeUncertain:
+		s.uncertainStamp = max(s.uncertainStamp, c.stamp)
 		if latest {
 			s.gen.uncertain = c
 			if s.lastObs.stamp > c.stamp { // a read after it was handled first
@@ -566,6 +573,11 @@ func (s *shutterSim) atTarget() bool {
 // full travel time yet.
 func (s *shutterSim) travelLeft() bool {
 	return (s.gen.target == 0 || s.gen.target == 100) && s.gen.travel < 100
+}
+
+// undecided reports whether an uncertain outcome has not been followed by newer evidence.
+func (s *shutterSim) undecided() bool {
+	return s.uncertainStamp > s.beliefStamp
 }
 
 // latestBusy reports whether the latest generation waits for the result of a command, or
