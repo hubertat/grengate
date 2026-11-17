@@ -124,6 +124,37 @@ func (gs *GrentonSet) InitClus() {
 		clu.set = gs
 		clu.InitAll()
 	}
+	gs.checkDuplicateIds()
+}
+
+// checkDuplicateIds logs one line per accessory ID that is already used by another
+// device, naming both. The ID is built from CLU number and device number only, so
+// different devices can collide; startup continues because such a setup runs today.
+func (gs *GrentonSet) checkDuplicateIds() {
+	seen := map[uint64]string{}
+	check := func(clu *Clu, co *CluObject) {
+		id := co.GetLongId()
+		desc := fmt.Sprintf("%q (%s|%s)", co.Name, clu.Id, co.GetMixedId())
+		if first, ok := seen[id]; ok {
+			gs.Logf("WARNING: duplicate accessory id %x: %s and %s; HomeKit will mix them up", id, first, desc)
+			return
+		}
+		seen[id] = desc
+	}
+	for _, clu := range gs.Clus {
+		for _, d := range clu.Lights {
+			check(clu, &d.CluObject)
+		}
+		for _, d := range clu.Therms {
+			check(clu, &d.CluObject)
+		}
+		for _, d := range clu.MotionSensors {
+			check(clu, &d.CluObject)
+		}
+		for _, d := range clu.Shutters {
+			check(clu, &d.CluObject)
+		}
+	}
 }
 
 // GetSetPath returns http path for setting value in grenton gate
