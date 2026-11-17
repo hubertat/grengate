@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/brutella/hap/accessory"
 	"github.com/brutella/hap/characteristic"
@@ -20,6 +21,10 @@ type Thermo struct {
 
 	Mode,
 	State int
+
+	// lastPoll is when a refresh last queued a read of the thermostat (its cadence,
+	// GrentonSet.dueForPoll). Guarded by GrentonSet.refreshMu.
+	lastPoll time.Time
 }
 
 func (gt *Thermo) applyRead(obj ReqObject, sentGen, _ uint64) (ApplyOutcome, error) {

@@ -6,8 +6,10 @@ import (
 	"time"
 )
 
-// refreshCounts is the outcome of one refresh (concept 3.6). Applied, Discarded, Missing
-// and Failed add up to Objects; Changed is the part of Applied whose state changed.
+// refreshCounts is the outcome of one refresh (concept 3.6). Objects counts the devices the
+// refresh queued; Applied, Discarded, Missing and Failed add up to it. Changed is the part
+// of Applied whose state changed. Skipped counts the devices not due this cycle (thermostats
+// on their slower cadence): they were not queued and are not part of Objects.
 type refreshCounts struct {
 	Objects   int
 	Applied   int
@@ -15,12 +17,66 @@ type refreshCounts struct {
 	Discarded int // valid, but dropped by the ordering rules (concept 3.3, rule 4)
 	Missing   int // not in the response, or invalid for the device
 	Failed    int // their request failed
-	Skipped   int // not due this cycle (stage 5; always 0 for now)
+	Skipped   int // not due this cycle; not part of Objects
 	Duration  time.Duration
 }
 
-// Refresh reads every device through the read lane and waits until each one has an
-// outcome. Every request is bounded by the request timeout, so a refresh always completes.
+// defaultThermoCycle is the default minimum time between polls of a thermostat.
+const defaultThermoCycle = 60 * time.Second
+
+// dueForPoll reports whether a refresh starting at now reads the device, and records when a
+// thermostat was queued. Every device is read in every refresh except a ready thermostat:
+// temperatures move slowly and a thermostat read costs several GATE calls, so it is read
+// only every ThermoCycleInSeconds (concept 3.6). A thermostat that is not ready is read in
+// every refresh, so the not-ready window stays short (concept 3.5). Call with refreshMu held.
+func (gs *GrentonSet) dueForPoll(d device, now time.Time) bool {
+	th, ok := d.(*Thermo)
+	if !ok {
+		return true
+	}
+	if th.isReady() && !th.lastPoll.IsZero() && !thermoPollDue(now.Sub(th.lastPoll), gs.thermoCycle(), gs.cycle()) {
+		return false
+	}
+	th.lastPoll = now
+	return true
+}
+
+// thermoPollDue reports whether a thermostat last queued since ago is due, polling every
+// at most once per refresh cycle. With every at or below one cycle that is every refresh.
+// Otherwise it is due from half a cycle before every: refreshes start a little after their
+// boundary, so a strict comparison would let a late start push every poll one cycle later.
+// The effective period is every rounded to whole cycles.
+func thermoPollDue(since, every, cycle time.Duration) bool {
+	if every <= cycle {
+		return true
+	}
+	return since >= every-cycle/2
+}
+
+func (gs *GrentonSet) thermoCycle() time.Duration {
+	if gs.ThermoCycleInSeconds <= 0 {
+		return defaultThermoCycle
+	}
+	return time.Duration(gs.ThermoCycleInSeconds) * time.Second
+}
+
+func (gs *GrentonSet) cycle() time.Duration {
+	if gs.cycleDuration <= 0 {
+		return 10 * time.Second
+	}
+	return gs.cycleDuration
+}
+
+// now is the time of the refresh scheduler's clock.
+func (gs *GrentonSet) now() time.Time {
+	if gs.clock == nil {
+		return time.Now()
+	}
+	return gs.clock.Now()
+}
+
+// Refresh reads every device that is due (dueForPoll) through the read lane and waits
+// until each one has an outcome. Every request is bounded by the request timeout, so a refresh always completes.
 // Only one refresh runs at a time. Applied state reaches HomeKit through the syncer, which
 // Refresh does not wait for: a stalled HomeKit connection can block hap's SetValue
 // indefinitely, and polling must go on regardless.
@@ -29,14 +85,19 @@ func (gs *GrentonSet) Refresh() refreshCounts {
 	defer gs.refreshMu.Unlock()
 
 	start := time.Now()
-	devs := gs.registry.devices()
-	objs := make([]ReqObject, len(devs))
-	for i, d := range devs {
-		objs[i] = d.readRequest()
+	now := gs.now()
+	var c refreshCounts
+	var objs []ReqObject
+	for _, d := range gs.registry.devices() {
+		if !gs.dueForPoll(d, now) {
+			c.Skipped++
+			continue
+		}
+		objs = append(objs, d.readRequest())
 	}
+	c.Objects = len(objs)
 	chans := gs.reader.Submit(objs...)
 
-	c := refreshCounts{Objects: len(devs)}
 	for _, ch := range chans {
 		r := <-ch
 		switch {
@@ -56,8 +117,8 @@ func (gs *GrentonSet) Refresh() refreshCounts {
 	c.Duration = time.Since(start)
 	gs.metrics.Refresh(RefreshEvent{Time: time.Now(), Counts: c})
 
-	summary := fmt.Sprintf("refresh: %d devices in %d ms: %d applied (%d changed), %d discarded, %d missing or invalid, %d failed",
-		c.Objects, c.Duration.Milliseconds(), c.Applied, c.Changed, c.Discarded, c.Missing, c.Failed)
+	summary := fmt.Sprintf("refresh: %d devices in %d ms (%d not due): %d applied (%d changed), %d discarded, %d missing or invalid, %d failed",
+		c.Objects, c.Duration.Milliseconds(), c.Skipped, c.Applied, c.Changed, c.Discarded, c.Missing, c.Failed)
 	if c.Missing > 0 || c.Failed > 0 {
 		gs.Logf("%s", summary)
 	} else {
@@ -103,13 +164,9 @@ func (gs *GrentonSet) startCycling(ctx context.Context) {
 	if clk == nil {
 		clk = realClock{}
 	}
-	cycle := gs.cycleDuration
-	if cycle <= 0 {
-		cycle = 10 * time.Second
-	}
 	s := &refreshScheduler{
 		origin:  clk.Now(),
-		cycle:   cycle,
+		cycle:   gs.cycle(),
 		clock:   clk,
 		refresh: func() { gs.Refresh() },
 		logf:    gs.Logf,
