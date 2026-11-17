@@ -17,12 +17,10 @@ func TestDevices_ConcurrentReadsAndCommandsAreRaceFree(t *testing.T) {
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 20; i++ {
-			gs.update([]ReqObject{
-				{Clu: clu.Id, Id: "DOU0001", Kind: "Light", Light: &Light{State: i%2 == 0}},
-				{Clu: clu.Id, Id: "THE0002", Kind: "Thermo", Thermo: &Thermo{TempCurrent: float64(i), State: 1}},
-				{Clu: clu.Id, Id: "ROL0003", Kind: "Shutter", Shutter: &Shutter{MaxTime: 20000}},
-			})
+		for i := 0; i < 10; i++ {
+			g.SetLight(clu.Id, "DOU0001", i%2 == 0)
+			g.SetThermo(clu.Id, "THE0002", float64(i), 21, 0, 1)
+			gs.Refresh()
 		}
 	}()
 	go func() {
@@ -49,6 +47,9 @@ func TestDevices_ConcurrentReadsAndCommandsAreRaceFree(t *testing.T) {
 	}()
 	wg.Wait()
 
+	if n := g.RequestCount(fakeReadPath); n != 10 {
+		t.Errorf("read requests = %d, want 10", n)
+	}
 	if n := g.RequestCount(fakeSetPath); n != 15 {
 		t.Errorf("commands at the fake GATE = %d, want 15", n)
 	}

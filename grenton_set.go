@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/brutella/hap/accessory"
-	"github.com/pkg/errors"
 )
 
 // GrentonSet is main struct representing settings and having child Clu structs
@@ -26,18 +26,15 @@ type GrentonSet struct {
 	HkPin  string
 	HkPath string
 
+	// FreshInSeconds is accepted so existing config files load; it has no effect.
 	FreshInSeconds  int
 	CycleInSeconds  int
 	Verbose         bool
 	PerformAutotest bool
 	QueryLimit      int
 
-	lastUpdated   time.Time
-	freshDuration time.Duration
 	cycleDuration time.Duration
 	cycling       *time.Ticker
-
-	broker GateBroker
 
 	registry *registry
 
@@ -45,7 +42,12 @@ type GrentonSet struct {
 	requestTimeout time.Duration
 	// stamps is the completion counter shared by both lanes (concept 3.1).
 	stamps atomic.Uint64
+	reader *lane
 	writer *lane
+	hkSync *hkSyncer
+
+	// refreshMu lets only one refresh run at a time.
+	refreshMu sync.Mutex
 }
 
 // Debugf logs info, when Verbose option is on
@@ -86,14 +88,7 @@ func (gs *GrentonSet) Config(path string) error {
 		}
 	}
 
-	confDuration, err := time.ParseDuration(fmt.Sprintf("%ds", gs.FreshInSeconds))
-	if gs.FreshInSeconds > 0 && err == nil {
-		gs.freshDuration = confDuration
-	} else {
-		gs.Logf("GrentonSet Config: error parsing fresh duration from config, using default")
-		gs.freshDuration = 3 * time.Second
-	}
-	confDuration, err = time.ParseDuration(fmt.Sprintf("%ds", gs.CycleInSeconds))
+	confDuration, err := time.ParseDuration(fmt.Sprintf("%ds", gs.CycleInSeconds))
 	if gs.CycleInSeconds > 0 && err == nil {
 		gs.cycleDuration = confDuration
 	} else {
@@ -109,21 +104,32 @@ func (gs *GrentonSet) Config(path string) error {
 		gs.HkPath = "hk"
 	}
 
-	gs.initBrokers()
-
 	return nil
 }
 
-// initBrokers creates the read and write brokers from the already resolved settings.
-func (gs *GrentonSet) initBrokers() {
-	gs.broker = GateBroker{}
-	gs.broker.Init(gs, gs.QueryLimit, gs.freshDuration)
-	gs.broker.PostPath = gs.Host + gs.ReadPath
-}
-
-// startWorkers creates the write lane and starts its worker. Call after InitClus and
-// before any HomeKit callback can run.
+// startWorkers creates the lanes and the HomeKit syncer and starts them. Call after
+// InitClus and before any refresh or HomeKit callback can run.
 func (gs *GrentonSet) startWorkers() {
+	if gs.QueryLimit <= 0 {
+		gs.QueryLimit = 30
+	}
+	gs.hkSync = newHkSyncer()
+	gs.hkSync.start()
+
+	gs.reader = newLane(laneConfig{
+		kind:       readLane,
+		url:        gs.Host + gs.ReadPath,
+		timeout:    gs.requestTimeout,
+		maxItems:   gs.QueryLimit,
+		asArray:    true,
+		merge:      mergeKeepPending,
+		stamps:     &gs.stamps,
+		logf:       gs.Logf,
+		debugf:     gs.Debugf,
+		onComplete: gs.readCompleted,
+	})
+	gs.reader.start()
+
 	// Legacy write protocol (the script deployed today): one single-object command per request.
 	gs.writer = newLane(laneConfig{
 		kind:       writeLane,
@@ -142,9 +148,41 @@ func (gs *GrentonSet) startWorkers() {
 
 // Stop stops the workers. Pending submissions are resolved as failed.
 func (gs *GrentonSet) Stop() {
+	if gs.reader != nil {
+		gs.reader.stop()
+	}
 	if gs.writer != nil {
 		gs.writer.stop()
 	}
+	if gs.hkSync != nil {
+		gs.hkSync.close()
+	}
+}
+
+// readCompleted is the read lane's completion hook: a read item is validated and applied
+// by its device, the outcome is recorded in r.Apply, and a HomeKit sync is queued. The sync
+// is queued after every applied read, changed or not, so HomeKit values the user changed
+// without effect (a failed write) return to the device state.
+func (gs *GrentonSet) readCompleted(e *laneEntry, r *laneResult) {
+	if r.Outcome != OutcomeOK {
+		return
+	}
+	obj := e.Obj()
+	d, ok := gs.registry.find(obj.Clu, obj.Id)
+	if !ok {
+		r.Apply, r.Err = ApplyInvalid, fmt.Errorf("no device %s|%s configured", obj.Clu, obj.Id)
+		return
+	}
+	changed, err := d.applyRead(*r.Item)
+	if err != nil {
+		r.Apply, r.Err = ApplyInvalid, err
+		return
+	}
+	r.Apply = ApplyUnchanged
+	if changed {
+		r.Apply = ApplyChanged
+	}
+	gs.hkSync.mark(d)
 }
 
 // writeCompleted is the write lane's completion hook: it logs the outcome of each command.
@@ -220,56 +258,6 @@ func (gs *GrentonSet) GetAllHkAcc() (slc []*accessory.A) {
 	}
 
 	return
-}
-
-// Refresh queues a read for every device and applies the answers
-func (gs *GrentonSet) Refresh() {
-
-	query := []ReqObject{}
-	for _, clu := range gs.Clus {
-		for _, light := range clu.Lights {
-			if light != nil {
-				query = append(query, light.Req)
-			}
-		}
-		for _, thermo := range clu.Therms {
-			if thermo != nil {
-				query = append(query, thermo.Req)
-			}
-		}
-		for _, sht := range clu.Shutters {
-			if sht != nil {
-				query = append(query, sht.Req)
-			}
-		}
-		for _, mosens := range clu.MotionSensors {
-			if mosens != nil {
-				query = append(query, mosens.Req)
-			}
-		}
-	}
-
-	objectsPending := gs.broker.Queue(nil, query...)
-	for len(objectsPending) > 0 {
-		objectsPending = gs.broker.Queue(nil, objectsPending...)
-	}
-
-	gs.lastUpdated = time.Now()
-
-	gs.Debugf("GrentonSet [%v] Refresh finished\n", &gs)
-}
-
-func (gs *GrentonSet) update(data []ReqObject) {
-	for _, object := range data {
-		d, ok := gs.registry.find(object.Clu, object.Id)
-		if !ok {
-			gs.Logf("GrentonSet update: no device %s|%s (%s) configured", object.Clu, object.Id, object.Kind)
-			continue
-		}
-		if err := loadReqObject(d, object); err != nil {
-			gs.Error(errors.Wrapf(err, "loading [%s|%s] failed", object.Clu, object.Id))
-		}
-	}
 }
 
 // TestAllGrentonGate iterates every object and checks individually if request is success http code

@@ -52,12 +52,14 @@ func TestRegistry_FindsEveryKindCaseInsensitive(t *testing.T) {
 
 func TestRegistry_RoutesReadItemsByIdentity(t *testing.T) {
 	clu := allKindsClu()
-	gs, _ := newTestSet(t, clu)
-	gs.update([]ReqObject{
-		{Clu: "clu_012abcde", Id: "dou0001", Kind: "Light", Light: &Light{State: true}},
-		{Clu: "CLU_012abcde", Id: "PIR0004", Kind: "MotionSensor", MotionSensor: &MotionSensor{State: true}},
-		{Clu: "CLU_012abcde", Id: "DOU0099", Kind: "Light", Light: &Light{State: true}},
-	})
+	gs, g := newTestSet(t, clu)
+	// The GATE answers with identities in other letter case.
+	g.RespondNext(fakeReadPath, `[{"Clu":"clu_012abcde","Id":"dou0001","Kind":"Light","Light":{"State":true}},
+		{"Clu":"CLU_012abcde","Id":"PIR0004","Kind":"MotionSensor","MotionSensor":{"State":true}},
+		{"Clu":"CLU_012abcde","Id":"DOU0099","Kind":"Light","Light":{"State":true}}]`)
+	if c := gs.Refresh(); c.Applied != 2 || c.Missing != 2 {
+		t.Errorf("refresh = %+v, want 2 applied, 2 missing", c)
+	}
 	if v := findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn).Val; v != true {
 		t.Errorf("light On = %v, want true", v)
 	}

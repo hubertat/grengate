@@ -46,17 +46,16 @@ func main() {
 		log.Fatalf("GrentonSet Config failed: %v", err)
 	}
 
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	gren.InitClus()
 	gren.startWorkers()
 	defer gren.Stop()
 
-	if gren.PerformAutotest || *performAutotest {
-		log.Print("Testing all Grenton elements")
-		gren.TestAllGrentonGate()
-	}
-
-	log.Println("Starting update cycles")
-	gren.StartCycling()
+	// Autotest, startup refresh and refresh cycle: HomeKit starts only after the startup
+	// refresh has an outcome for every device.
+	gren.startup(ctx, gren.PerformAutotest || *performAutotest)
 
 	if gren.InputServerPort > 0 {
 		log.Printf("Starting input server (listening on port %d)\n", gren.InputServerPort)
@@ -93,19 +92,6 @@ func main() {
 	}
 
 	server.Pin = gren.HkPin
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	signal.Notify(c, syscall.SIGTERM)
-
-	ctx, cancel := context.WithCancel(ctx)
-	go func() {
-		<-c
-		// Stop delivering signals.
-		signal.Stop(c)
-		// Cancel the context to stop the server.
-		cancel()
-	}()
 
 	err = server.ListenAndServe(ctx)
 	if err != nil {

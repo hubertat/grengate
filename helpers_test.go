@@ -53,17 +53,25 @@ func captureLog(t testing.TB) *syncBuffer {
 // registered with the fake GATE in their default state. Workers are stopped at test end.
 func newTestSet(t testing.TB, clus ...*Clu) (*GrentonSet, *fakeGate) {
 	t.Helper()
+	return newTestSetWith(t, nil, clus...)
+}
+
+// newTestSetWith is newTestSet with a hook that adjusts the GrentonSet (QueryLimit,
+// requestTimeout, ...) before its devices are initialised and its workers started.
+func newTestSetWith(t testing.TB, configure func(gs *GrentonSet), clus ...*Clu) (*GrentonSet, *fakeGate) {
+	t.Helper()
 	g := newFakeGate(t)
 	gs := &GrentonSet{
 		Host:          g.URL(),
 		ReadPath:      fakeReadPath,
 		SetLightPath:  fakeSetPath,
 		QueryLimit:    30,
-		freshDuration: 3 * time.Second,
 		cycleDuration: 10 * time.Second,
 		Clus:          clus,
 	}
-	gs.initBrokers()
+	if configure != nil {
+		configure(gs)
+	}
 	gs.InitClus()
 	gs.startWorkers()
 	t.Cleanup(gs.Stop)
