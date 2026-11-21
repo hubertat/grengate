@@ -33,16 +33,16 @@ Binaries from stages 2 to 4 have no protocol switch: they always use the legacy 
 
 **Work**:
 
-- [ ] `fakegate_test.go`: an `httptest` server standing in for the GATE. It serves a read path and a set path, keeps device state, records every request,
+- [x] `fakegate_test.go`: an `httptest` server standing in for the GATE. It serves a read path and a set path, keeps device state, records every request,
       and can be told to delay, hang until released, fail, omit devices or return invalid payloads. It answers in old-script style (object with read-back payload) or new-script style (concept 3.7).
-- [ ] Test helper that builds a `GrentonSet` wired to the fake GATE without a config file.
-- [ ] `light_test.go`: fix the `Init` call that does not compile. Rewrite `TestLight_OutletRemoteUpdateQueuesLightRequest` to assert the request the fake GATE received instead of reading the broker's queue.
-- [ ] `go vet` findings: three `Logf` calls without format verbs (`gate_broker.go`), unbuffered signal channel (`main.go`).
-- [ ] `main.go`: `--version` prints "grengate" instead of "blesrv".
-- [ ] `shutter.go`: create `cancelMovement`; refuse a move when `MaxTime` is below 100 ms (log, put the HomeKit target back) instead of sending on the channel.
-- [ ] Startup warning for duplicate accessory IDs, naming both devices (concept 3.9).
-- [ ] Remove dead code: `Light.Get`, `Thermo.GetTemperature`, `Thermo.GetState`, `CluObject.Update`, `RequestAndUpdate`, `CheckFreshness`, `MotionSensor.SetOn` with its timer fields, the commented block in `SendReq`.
-- [ ] `CLAUDE.md`: drop the references to `HkSetupId`, `grengateVer` and freshness checking.
+- [x] Test helper that builds a `GrentonSet` wired to the fake GATE without a config file.
+- [x] `light_test.go`: fix the `Init` call that does not compile. Rewrite `TestLight_OutletRemoteUpdateQueuesLightRequest` to assert the request the fake GATE received instead of reading the broker's queue.
+- [x] `go vet` findings: three `Logf` calls without format verbs (`gate_broker.go`), unbuffered signal channel (`main.go`).
+- [x] `main.go`: `--version` prints "grengate" instead of "blesrv".
+- [x] `shutter.go`: create `cancelMovement`; refuse a move when `MaxTime` is below 100 ms (log, put the HomeKit target back) instead of sending on the channel.
+- [x] Startup warning for duplicate accessory IDs, naming both devices (concept 3.9).
+- [x] Remove dead code: `Light.Get`, `Thermo.GetTemperature`, `Thermo.GetState`, `CluObject.Update`, `RequestAndUpdate`, `CheckFreshness`, `MotionSensor.SetOn` with its timer fields, the commented block in `SendReq`.
+- [x] `CLAUDE.md`: drop the references to `HkSetupId`, `grengateVer` and freshness checking.
 
 **Success Criteria**:
 
@@ -57,7 +57,7 @@ Binaries from stages 2 to 4 have no protocol switch: they always use the legacy 
 - `TestDuplicateAccessoryIdIsReported`.
 - `TestFakeGate_*`: the fake itself answers in both styles and honours hang, fail and omit instructions.
 
-**Status**: Not Started
+**Status**: Complete
 
 ---
 
@@ -68,25 +68,25 @@ Behaviour towards the GATE stays as today: single-object writes, same scripts. H
 
 **Work**:
 
-- [ ] `lane.go`: mailbox keyed by device in arrival order, worker taking at most one request's worth, one-slot result channel per submission,
+- [x] `lane.go`: mailbox keyed by device in arrival order, worker taking at most one request's worth, one-slot result channel per submission,
       fan-out to every channel of a merged read entry, "superseded" result for a replaced write, completion stamp from one process-wide counter.
       Two hooks set by `GrentonSet`: one called when a request is sent, one when an entry completes. Both must return without blocking.
-- [ ] GATE client used by the lanes: POST, 10 s timeout, decoding of a read response (array) and of a write response in both shapes (object or array, concept 3.7).
+- [x] GATE client used by the lanes: POST, 10 s timeout, decoding of a read response (array) and of a write response in both shapes (object or array, concept 3.7).
       Results distinguish acknowledged, per-item error and uncertain outcome (concept 3.2).
-- [ ] `registry.go`: one device map keyed by `Clu` + `Id` (case-insensitive, as the input server matches today) and a small device interface.
+- [x] `registry.go`: one device map keyed by `Clu` + `Id` (case-insensitive, as the input server matches today) and a small device interface.
       It replaces `FindLight`, `FindThermo`, `FindShutter`, `FindMotionSensor` and the switch in `update()`.
-- [ ] `CluObject` gets a mutex guarding the device's fields; `LoadReqObject` and the setters take it. This is what makes `-race` meaningful from here on.
-- [ ] Write path on the write lane in the legacy protocol: one command per request, sent as a single object. The callbacks submit and wait for the result. A write response is never loaded as device state;
+- [x] `CluObject` gets a mutex guarding the device's fields; `LoadReqObject` and the setters take it. This is what makes `-race` meaningful from here on.
+- [x] Write path on the write lane in the legacy protocol: one command per request, sent as a single object. The callbacks submit and wait for the result. A write response is never loaded as device state;
       the dead `LoadReqObject(obj)` calls after `SendReq` in `thermo.go` go away with `SendReq`.
-- [ ] `Refresh` on the read lane: submit every device, wait for an outcome per device (applied, discarded, missing or invalid, failed), count them.
+- [x] `Refresh` on the read lane: submit every device, wait for an outcome per device (applied, discarded, missing or invalid, failed), count them.
       `main.go` runs one refresh before the HomeKit server starts.
-- [ ] Refresh scheduling without `time.Ticker`. A ticker keeps one tick that fired during a slow refresh and delivers it right after, which would start a second refresh at once.
+- [x] Refresh scheduling without `time.Ticker`. A ticker keeps one tick that fired during a slow refresh and delivers it right after, which would start a second refresh at once.
       Instead the cycle boundaries are fixed from the start time; after a refresh completes, the loop waits for the first boundary that is still in the future.
       Boundaries that passed during the refresh are skipped and counted in the log. The next-boundary calculation is a pure function, and the loop takes an injected clock.
-- [ ] Autotest on the read lane with validation of identity and payload, covering all device kinds, report-only (concept 3.9). Remove `TestGrentonGate` and `Clu.block`.
-- [ ] `metrics.go`: `Metrics` interface, no-op implementation, one debug log line per request. Overlap detection between the two lanes.
-- [ ] `influx.go`: InfluxDB v2 line protocol over plain HTTP with the schema of concept 3.8. Buffered, sent in the background, bounded buffer, never blocks a lane.
-- [ ] Delete `gate_broker.go`. Update `config.json.example` and `README.md` for `InfluxDB` and the unused `FreshInSeconds`.
+- [x] Autotest on the read lane with validation of identity and payload, covering all device kinds, report-only (concept 3.9). Remove `TestGrentonGate` and `Clu.block`.
+- [x] `metrics.go`: `Metrics` interface, no-op implementation, one debug log line per request. Overlap detection between the two lanes.
+- [x] `influx.go`: InfluxDB v2 line protocol over plain HTTP with the schema of concept 3.8. Buffered, sent in the background, bounded buffer, never blocks a lane.
+- [x] Delete `gate_broker.go`. Update `config.json.example` and `README.md` for `InfluxDB` and the unused `FreshInSeconds`.
 
 **Success Criteria**:
 
@@ -111,7 +111,7 @@ Behaviour towards the GATE stays as today: single-object writes, same scripts. H
 - Metrics: each event reported once; overlap flag set when the fake GATE holds a read open during a write.
 - Influx writer: line format, integer suffix, tag escaping, behaviour when the endpoint is down.
 
-**Status**: Not Started
+**Status**: Complete
 
 ---
 
@@ -122,17 +122,17 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 
 **Work**:
 
-- [ ] Wire payload types separate from the device structs, with pointer fields so an absent field can be told from zero.
+- [x] Wire payload types separate from the device structs, with pointer fields so an absent field can be told from zero.
       `ReqObject` carries these instead of `*Light`, `*Thermo`, `*Shutter`, `*MotionSensor`. Validity per kind as in concept 3.5.
-- [ ] Per-device state: generation, pending or in-flight command, ready flag. The read lane's send hook records generations; the completion hooks apply rules 2, 4 and 5, including the confirm read.
-- [ ] Command snapshots built under the device lock. Thermostat merge in the write mailbox (field-wise); plain replace for lights and shutters.
+- [x] Per-device state: generation, pending or in-flight command, ready flag. The read lane's send hook records generations; the completion hooks apply rules 2, 4 and 5, including the confirm read.
+- [x] Command snapshots built under the device lock. Thermostat merge in the write mailbox (field-wise); plain replace for lights and shutters.
       The thermostat snapshot carries all three fields in this stage; partial commands arrive with the new protocol in stage 5.
-- [ ] Light and thermostat callbacks: apply rule 1, submit, return.
-- [ ] Readiness in HomeKit: `ValueRequestFunc` answers reads of a not-ready device with `JsonStatusServiceCommunicationFailure`;
+- [x] Light and thermostat callbacks: apply rule 1, submit, return.
+- [x] Readiness in HomeKit: `ValueRequestFunc` answers reads of a not-ready device with `JsonStatusServiceCommunicationFailure`;
       `SetValueRequestFunc` refuses a write whose baseline is unknown with the same status, logs it and queues a read.
-- [ ] Thermostat: sync `TargetHeatingCoolingState` from Grenton state and mode (off; heat for mode 0; auto for mode 1).
-- [ ] Input server: a motion sensor push is applied under rule 3; unknown device or bad payload returns a 4xx.
-- [ ] A test pinning hap's same-value behaviour (concept 3.5), so a library upgrade that changes it is noticed.
+- [x] Thermostat: sync `TargetHeatingCoolingState` from Grenton state and mode (off; heat for mode 0; auto for mode 1).
+- [x] Input server: a motion sensor push is applied under rule 3; unknown device or bad payload returns a 4xx.
+- [x] A test pinning hap's same-value behaviour (concept 3.5), so a library upgrade that changes it is noticed.
 
 **Success Criteria**:
 
@@ -154,7 +154,7 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 
 **Manual check before deploying**: one device with a deliberately wrong id shows as "No Response" in the Home app, the rest work.
 
-**Status**: Not Started
+**Status**: Complete except: the manual check before deploying (one device with a wrong id shows as "No Response" in the Home app) needs the real Home app
 
 ---
 
@@ -164,13 +164,13 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 
 **Work**:
 
-- [ ] Shutter goroutine with one inbox for new targets, command results, read observations and clock ticks. The clock is injected so tests control time.
-- [ ] Belief, movement generation and the clock rules. Evidence is applied by completion stamp.
-- [ ] Automatic `STOP` at the target, issued by the latest generation only.
-- [ ] "Did not run" detection, one retry, and giving up with the HomeKit target set to where the motor ends up.
-- [ ] Reconciliation after an uncertain outcome, per the table in concept 3.4.
-- [ ] Shutter readiness: a usable `MaxTime` (at least 100 ms). Replaces the stage 1 guard.
-- [ ] Remove `moveLoop`, `cancelMovement`, `looping` and `moveTicker`.
+- [x] Shutter goroutine with one inbox for new targets, command results, read observations and clock ticks. The clock is injected so tests control time.
+- [x] Belief, movement generation and the clock rules. Evidence is applied by completion stamp.
+- [x] Automatic `STOP` at the target, issued by the latest generation only.
+- [x] "Did not run" detection, one retry, and giving up with the HomeKit target set to where the motor ends up.
+- [x] Reconciliation after an uncertain outcome, per the table in concept 3.4.
+- [x] Shutter readiness: a usable `MaxTime` (at least 100 ms). Replaces the stage 1 guard.
+- [x] Remove `moveLoop`, `cancelMovement`, `looping` and `moveTicker`.
 
 **Success Criteria**:
 
@@ -193,7 +193,7 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 - Externally observed stop ends the simulation.
 - Move refused while `MaxTime` is unknown.
 
-**Status**: Not Started
+**Status**: Complete
 
 ---
 
@@ -203,16 +203,17 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
 
 **Work**:
 
-- [ ] `grenton/update-script.lua`: response shaped like the request, acknowledgement items with `Error`, `pcall` per item, thermostat sets only the fields present, no read-back (concept 3.7).
-- [ ] `grenton/read-script.lua`: thermostat read trimmed to current temperature, target temperature, setpoint, state and mode.
-- [ ] `grenton/README.md`: the request and response contract, and the rollout order.
+- [x] `grenton/update-script.lua`: response shaped like the request, acknowledgement items with `Error`, `pcall` per item, thermostat sets only the fields present, no read-back (concept 3.7).
+- [x] `grenton/read-script.lua`: thermostat read trimmed to current temperature, target temperature, setpoint, state and mode.
+- [x] `grenton/README.md`: the request and response contract, and the rollout order.
 - [ ] Deploy both scripts and run the manual check below against the binary from stage 4.
-- [ ] `LegacyWriteScript` switch. New protocol (default): every write request is an array, also when it holds one command, and thermostat commands are partial.
+- [x] `LegacyWriteScript` switch. New protocol (default): every write request is an array, also when it holds one command, and thermostat commands are partial.
       Legacy protocol: unchanged from stage 4. The protocol decides what a command contains; `SetterQueueSize` and `SetterFlushMs` only decide how commands are grouped.
-- [ ] Write lane batching in the new protocol: up to `SetterQueueSize` commands per request after the `SetterFlushMs` window.
-- [ ] `ThermoCycleInSeconds`: thermostats are queued in a refresh only when due; devices that are not ready are queued every cycle; devices not due count as `skipped_objects`.
+- [x] Write lane batching in the new protocol: up to `SetterQueueSize` commands per request after the `SetterFlushMs` window.
+- [x] `ThermoCycleInSeconds`: thermostats are queued in a refresh only when due; devices that are not ready are queued every cycle; devices not due count as `skipped_objects`.
 - [ ] Measure on the real installation and record the results in `README.md`: write request duration against item count, queue wait, lane overlap, shutter position error on partial moves. Adjust `SetterQueueSize`, `SetterFlushMs` and `QueryLimit` defaults from them.
-- [ ] Final documentation: `README.md`, `config.json.example`, the architecture section of `CLAUDE.md`. Remove this file.
+- [x] Final documentation: `README.md`, `config.json.example`, the architecture section of `CLAUDE.md`.
+- [ ] Remove this file (kept while the deploy, manual check and measurement items above are open).
 
 **Success Criteria**:
 
@@ -241,10 +242,12 @@ The shutter gets the same state handling for reads but keeps its waiting callbac
    - Before stage 2: each command takes effect and the HomeKit request returns within a round trip, with no hang.
      The log line "Unmarshal data error" after each write is expected here: that binary reports every successful write this way, with the old script as well. Any other error, or a request that does not return, is a failure.
 2. After deploying the stage 5 binary: run a scene with at least six lights and confirm in the log that they left in batched requests.
-3. Send a command for a device id that does not exist on the CLU and confirm the log shows a per-item error while the rest of the batch is applied.
+3. Add a light on a CLU id that does not exist on the GATE to the configuration, switch it together with real lights in one scene,
+   and confirm the log shows a per-item error ("unknown CLU") for it while the rest of the batch is applied.
+   Then switch a light whose id does not exist on a real CLU and record what happens (no error, or an error marked uncertain); this is an observation to record in `grenton/README.md`, not a pass criterion.
 4. If anything fails, set `LegacyWriteScript` to true to return to single-object writes. The new script accepts those as well.
 
-**Status**: Not Started
+**Status**: Code complete; pending on the real GATE: deploy the scripts and run the manual check, measurements and default tuning (then remove this file)
 
 ---
 

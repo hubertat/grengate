@@ -34,7 +34,7 @@ func main() {
 
 	// Show version and exit if requested
 	if *showVersion {
-		fmt.Printf("blesrv %s\n", Version)
+		fmt.Printf("grengate %s\n", Version)
 		fmt.Printf("Git Commit: %s\n", GitCommit)
 		fmt.Printf("Build Date: %s\n", BuildDate)
 		return
@@ -46,24 +46,18 @@ func main() {
 		log.Fatalf("GrentonSet Config failed: %v", err)
 	}
 
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	gren.InitClus()
+	gren.startWorkers()
+	defer gren.Stop()
 
-	if gren.PerformAutotest || *performAutotest {
-		log.Print("Testing all Grenton elements")
-		gren.TestAllGrentonGate()
-	}
-
-	log.Println("Starting update cycles")
-	gren.StartCycling()
-
-	if gren.InputServerPort > 0 {
-		log.Printf("Starting input server (listening on port %d)\n", gren.InputServerPort)
-		grentonIn := NewInputServer(&gren, gren.InputServerPort)
-		go func() {
-			log.Fatal(grentonIn.Run())
-		}()
-	} else {
-		log.Println("Input server disabled")
+	// Autotest and startup refresh: HomeKit starts only after the startup refresh has an
+	// outcome for every device.
+	if err := gren.startup(ctx, gren.PerformAutotest || *performAutotest); err != nil {
+		log.Printf("grengate exiting during startup: %v", err)
+		return
 	}
 
 	log.Print("HomeKit init")
@@ -92,18 +86,20 @@ func main() {
 
 	server.Pin = gren.HkPin
 
-	c := make(chan os.Signal)
-	signal.Notify(c, os.Interrupt)
-	signal.Notify(c, syscall.SIGTERM)
+	// Everything that syncs device state to HomeKit starts after hap.NewServer has set up
+	// the characteristics.
+	log.Println("Starting update cycles")
+	gren.startCycling(ctx)
 
-	ctx, cancel := context.WithCancel(ctx)
-	go func() {
-		<-c
-		// Stop delivering signals.
-		signal.Stop(c)
-		// Cancel the context to stop the server.
-		cancel()
-	}()
+	if gren.InputServerPort > 0 {
+		log.Printf("Starting input server (listening on port %d)\n", gren.InputServerPort)
+		grentonIn := NewInputServer(&gren, gren.InputServerPort)
+		go func() {
+			log.Fatal(grentonIn.Run())
+		}()
+	} else {
+		log.Println("Input server disabled")
+	}
 
 	err = server.ListenAndServe(ctx)
 	if err != nil {

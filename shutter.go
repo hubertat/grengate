@@ -9,13 +9,9 @@ import (
 	"github.com/brutella/hap/service"
 )
 
-type shutterCmd int
-
-const (
-	shutterUp shutterCmd = iota
-	shutterDown
-	shutterStop
-)
+// minShutterMaxTime is the shortest travel time (ms) the movement simulation can work with:
+// the simulated position advances every MaxTime/100 ms.
+const minShutterMaxTime = 100
 
 type ShutterAccessory struct {
 	*accessory.A
@@ -27,13 +23,19 @@ type Shutter struct {
 
 	hk ShutterAccessory
 
+	// Guarded by mu. currentPosition is written by the simulation goroutine only;
+	// targetPosition by the HomeKit callback (a new target) and by the simulation (a target
+	// it ends or gives up), the latter only while no newer HomeKit target exists: targetGen
+	// is the movement generation of the latest HomeKit target.
 	currentPosition int
 	targetPosition  int
-	cancelMovement  chan bool
-	moveTicker      *time.Ticker
-	looping         bool
+	targetGen       uint64
 
-	// State: 0 - stopped; 1 - going up; 2 - going down
+	// sim is the simulation goroutine's state (shutter_sim.go).
+	sim *shutterSim
+
+	// State is the motor state HomeKit shows: the simulation's belief (0 stopped, 1 going
+	// up, 2 going down). Written by the simulation goroutine only.
 	State   int
 	MaxTime int
 }
@@ -47,6 +49,7 @@ func (sh *Shutter) InitAll() {
 
 	sh.currentPosition = 100
 	sh.targetPosition = 100
+	sh.sim = newShutterSim(sh)
 
 	sh.AppendHk()
 }
@@ -65,7 +68,10 @@ func (sh *Shutter) AppendHk() {
 	sh.hk.WindowCovering.TargetPosition.SetValue(sh.targetPosition)
 	sh.hk.WindowCovering.PositionState.SetValue(sh.GetHkState())
 
+	// A move needs MaxTime (concept 3.5): refused until the shutter was read.
+	sh.hk.WindowCovering.TargetPosition.SetValueRequestFunc = sh.writeGuard("move")
 	sh.hk.WindowCovering.TargetPosition.OnValueRemoteUpdate(sh.SetPosition)
+	sh.guardReads(sh.hk.A)
 
 	sh.clu.set.Logf("HK WindowCovering added (id: %x)", sh.hk.A.Id)
 }
@@ -82,128 +88,59 @@ func (sh *Shutter) GetHkState() int {
 	}
 }
 
-// Sync sets HK accessory values based on Shutter values
+// Sync pushes the target, the position and the movement state to HomeKit.
 func (sh *Shutter) Sync() {
-	sh.hk.WindowCovering.CurrentPosition.SetValue(sh.currentPosition)
-	sh.hk.WindowCovering.PositionState.SetValue(sh.GetHkState())
+	sh.syncMu.Lock()
+	defer sh.syncMu.Unlock()
+	sh.mu.Lock()
+	current, target, state := sh.currentPosition, sh.targetPosition, sh.GetHkState()
+	sh.mu.Unlock()
+
+	wc := sh.hk.WindowCovering
+	wc.TargetPosition.SetValue(target)
+	wc.CurrentPosition.SetValue(current)
+	wc.PositionState.SetValue(state)
 }
 
-// SetPosition check which direction should move and call StartMoving func
+// stepDuration is the time the simulated position takes for one percent: MaxTime/100.
+func (sh *Shutter) stepDuration() time.Duration {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	return time.Duration(sh.MaxTime) * time.Millisecond / 100
+}
+
+// SetPosition is the HomeKit write of the target position. It records the target, starts a
+// new movement generation and hands it to the simulation goroutine without waiting for the
+// GATE (concept 3.4). writeGuard refuses it while the shutter is not ready (no MaxTime).
 func (sh *Shutter) SetPosition(target int) {
-	sh.clu.set.Debugf("Shutter SetPosition | target: %d\tcurrent: %d\told target: %d\n", target, sh.currentPosition, sh.targetPosition)
-	sh.hk.WindowCovering.TargetPosition.SetValue(target)
+	sh.mu.Lock()
+	if !sh.ready { // refused by writeGuard: no usable MaxTime yet
+		sh.mu.Unlock()
+		return
+	}
+	sh.targetGen++
 	sh.targetPosition = target
+	sh.sim.newTarget(sh.targetGen, target)
+	sh.mu.Unlock()
+	sh.clu.set.hkSync.mark(sh) // see hkSyncer: a sync in progress may have overwritten the write
+}
 
-	var cmd shutterCmd
-
-	if target == sh.currentPosition {
-		cmd = shutterStop
-	} else {
-		if target > sh.currentPosition {
-			if target == 100 {
-				sh.clu.set.Debugf("Shutter || going up and target == 100, setting current to 0")
-				sh.currentPosition = 0
-			}
-			cmd = shutterUp
-		} else {
-			if target == 0 {
-				sh.clu.set.Debugf("Shutter || going down and target == 0, setting current to 100")
-				sh.currentPosition = 100
-			}
-			cmd = shutterDown
-		}
-	}
-
-	sh.clu.set.Debugf("Shutter setting position cmd: %v\n", cmd)
-
-	err := sh.sendCmd(cmd)
+// applyRead applies a read result. A shutter is ready once a read with State and a usable
+// MaxTime (concept 3.5) has been applied. The observed motor state goes to the simulation
+// goroutine with the read's completion stamp, without waiting for it; the goroutine decides
+// what HomeKit shows (concept 3.4).
+func (sh *Shutter) applyRead(obj ReqObject, sentGen, stamp uint64) (ApplyOutcome, error) {
+	p, err := validShutter(obj)
 	if err != nil {
-		sh.clu.set.Error(fmt.Errorf("Shutter sendCmd: error from sending request:\n%v", err))
+		return ApplyInvalid, err
 	}
-
-	period, err := time.ParseDuration(fmt.Sprintf("%dms", sh.MaxTime/100))
-	if err != nil {
-		sh.clu.set.Error(err)
-		return
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if !sh.acceptReadLocked(sentGen) {
+		return ApplyDiscarded, nil
 	}
-	if sh.looping || period <= 0 {
-		sh.cancelMovement <- true
-		return
-	}
-	sh.clu.set.Debugf("Shutter starting move ticker period: %s\n", period.String())
-	sh.moveTicker = time.NewTicker(period)
-	go sh.moveLoop()
-
-}
-
-func (sh *Shutter) moveLoop() {
-	sh.looping = true
-
-	for {
-		select {
-		case <-sh.cancelMovement:
-			sh.sendCmd(shutterStop)
-			sh.moveTicker.Stop()
-			sh.Sync()
-			sh.looping = false
-			return
-		case <-sh.moveTicker.C:
-			if sh.targetPosition == sh.currentPosition {
-				sh.sendCmd(shutterStop)
-				sh.moveTicker.Stop()
-				sh.Sync()
-				sh.looping = false
-				return
-			}
-			if sh.currentPosition < sh.targetPosition {
-				sh.currentPosition++
-			} else {
-				sh.currentPosition--
-			}
-		}
-	}
-
-}
-
-func (sh *Shutter) sendCmd(cmd shutterCmd) error {
-	req := ReqObject{
-		Kind: "Shutter",
-		Clu:  sh.clu.Id,
-		Id:   sh.GetMixedId(),
-	}
-
-	switch cmd {
-	case shutterUp:
-		req.Cmd = "MOVEUP"
-	case shutterDown:
-		req.Cmd = "MOVEDOWN"
-	case shutterStop:
-		req.Cmd = "STOP"
-	}
-
-	// ignoring returned object - cmd endpoint not working correctly
-	// status will be updated on next refresh
-	// obj, err := sh.SendReq(req)
-	_, err := sh.SendReq(req)
-	return err
-}
-
-// LoadReqObject checks object received from http request end reads it into Shutter
-func (sh *Shutter) LoadReqObject(obj ReqObject) error {
-	if obj.Kind != "Shutter" {
-		return fmt.Errorf("Shutter LoadReqObject: wrong object kind (%s)", obj.Kind)
-	}
-
-	if obj.Shutter == nil {
-		return fmt.Errorf("Shutter LoadReqObject: missing Shutter object")
-	}
-
-	sh.clu.set.Debugf("Shutter LoadReqObject loading: \n%+v", obj)
-
-	sh.State = obj.Shutter.State
-	sh.MaxTime = obj.Shutter.MaxTime
-
-	sh.Sync()
-
-	return nil
+	changed := sh.State != *p.State || sh.MaxTime != *p.MaxTime
+	sh.MaxTime = *p.MaxTime
+	sh.sim.observed(*p.State, stamp)
+	return sh.appliedLocked(changed), nil
 }

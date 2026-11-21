@@ -23,10 +23,7 @@ end
 function ReadThermo(clu, thermo, sensor)
 	local Thermo = {}
 
-	Thermo.TempMin = _G[clu]:execute(0, thermo .. ":get(10)")
-	Thermo.TempMax = _G[clu]:execute(0, thermo .. ":get(11)")
 	Thermo.TempTarget = _G[clu]:execute(0, thermo .. ":get(12)")
-	Thermo.TempHoliday = _G[clu]:execute(0, thermo .. ":get(4)")
 	Thermo.TempSetpoint = _G[clu]:execute(0, thermo .. ":get(3)")
 	Thermo.Mode = _G[clu]:execute(0, thermo .. ":get(8)")
 	Thermo.State = _G[clu]:execute(0, thermo .. ":get(6)")

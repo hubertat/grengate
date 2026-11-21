@@ -10,8 +10,36 @@
 	"ReadPath": "read/",
 	"SetLightPath": "set/",
 
-	## data 'freshness' after how many seconds refresh all data
+	## every how many seconds all devices are read from the GATE (default 10)
+	"CycleInSeconds": 10,
+	## devices per read request (default 30)
+	"QueryLimit": 30,
+
+	## thermostats are read about every this many seconds (default 60), rounded to whole cycles;
+	## thermostats not read yet, or whose last read failed, are read every cycle; with
+	## LegacyWriteScript true thermostats are read every cycle
+	"ThermoCycleInSeconds": 60,
+
+	## write protocol: false (default) sends batched array requests with partial thermostat commands
+	## and needs the new grenton/update-script.lua on the GATE; true sends one single-object request
+	## per command with three-field thermostat commands (old script; the new script accepts it too)
+	"LegacyWriteScript": false,
+	## commands per write request (default 5) and batching window in ms (default 30);
+	## grouping only, both ignored when LegacyWriteScript is true
+	"SetterQueueSize": 5,
+	"SetterFlushMs": 30,
+
+	## no longer used; still accepted so older config files load
 	"FreshInSeconds": 5,
+
+	## optional: metrics to InfluxDB v2 (off when the block is missing or Enabled is false)
+	"InfluxDB": {
+		"Enabled": false,
+		"URL": "http://localhost:8086",
+		"Token": "your-token",
+		"Org": "your-org",
+		"Bucket": "grengate"
+	},
 
 	## define clus and devices here
 	"Clus": [

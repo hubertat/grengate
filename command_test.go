@@ -1,0 +1,243 @@
+package main
+
+import (
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/brutella/hap/characteristic"
+)
+
+func thermoCmd(setpoint *float64, state, mode *int, owners ...cmdOwner) ReqObject {
+	return ReqObject{Clu: tCLU, Id: "THE0002", Kind: "Thermo", Cmd: "SET",
+		Thermo: &ThermoPayload{TempSetpoint: setpoint, State: state, Mode: mode}, owners: owners}
+}
+
+func TestMergeCommand_ThermostatFieldWise(t *testing.T) {
+	dev, other := &CluObject{}, &CluObject{}
+	setpoint := thermoCmd(ptr(23.0), nil, nil, cmdOwner{dev, 1})
+	mode := thermoCmd(nil, ptr(1), ptr(1), cmdOwner{dev, 2})
+
+	merged, supersede := mergeCommand(setpoint, mode)
+	if supersede {
+		t.Error("a merged thermostat command must not supersede the pending one")
+	}
+	th := merged.Thermo
+	if th.TempSetpoint == nil || *th.TempSetpoint != 23 || th.State == nil || *th.State != 1 || th.Mode == nil || *th.Mode != 1 {
+		t.Errorf("merged = %+v, want setpoint 23, state 1, mode 1", th)
+	}
+	if len(merged.owners) != 1 || merged.owners[0] != (cmdOwner{dev, 2}) {
+		t.Errorf("merged owners = %v, want the device with the newer command's seq 2", merged.owners)
+	}
+	if setpoint.Thermo.State != nil {
+		t.Error("the pending command was modified in place")
+	}
+
+	// The newer command's fields win.
+	merged, _ = mergeCommand(merged, thermoCmd(ptr(19.5), nil, nil, cmdOwner{other, 1}))
+	if *merged.Thermo.TempSetpoint != 19.5 || *merged.Thermo.State != 1 {
+		t.Errorf("second merge = %+v", merged.Thermo)
+	}
+	// Another device's command (a duplicated configuration entry) keeps both owners.
+	if len(merged.owners) != 2 || merged.owners[0] != (cmdOwner{other, 1}) || merged.owners[1] != (cmdOwner{dev, 2}) {
+		t.Errorf("owners after a merge with another device = %v, want both", merged.owners)
+	}
+
+	// Lights and shutters: plain replace.
+	if out, supersede := mergeCommand(lightCmd("DOU0001", true), lightCmd("DOU0001", false)); !supersede || *out.Light.State {
+		t.Errorf("light merge = %+v, supersede %v; want the newer command replacing", out.Light, supersede)
+	}
+}
+
+// Both submissions of a merged thermostat command share its outcome.
+func TestMergeCommand_ThermostatSubmittersShareOutcome(t *testing.T) {
+	g := newFakeGate(t)
+	g.SetThermo(tCLU, "THE0002", 20, 21, 0, 0)
+	g.SetLight(tCLU, "DOU0001", false)
+	l := newTestLane(t, g, writeLane, func(c *laneConfig) { c.merge = mergeCommand })
+
+	h := g.HoldNext(fakeSetPath)
+	blocker := l.Submit(lightCmd("DOU0001", true))[0]
+	h.Wait(t)
+	first := l.Submit(thermoCmd(ptr(23.0), nil, nil))[0]
+	second := l.Submit(thermoCmd(nil, ptr(1), ptr(1)))[0]
+	h.Release()
+	waitResult(t, blocker)
+	r1, r2 := waitResult(t, first), waitResult(t, second)
+	if r1.Outcome != OutcomeOK || r2.Outcome != OutcomeOK || r1.Stamp != r2.Stamp {
+		t.Errorf("results %v/%d and %v/%d, want both acknowledged with one stamp", r1.Outcome, r1.Stamp, r2.Outcome, r2.Stamp)
+	}
+	reqs := g.Requests(fakeSetPath)
+	if len(reqs) != 2 {
+		t.Fatalf("set requests = %d, want 2 (blocker, one merged thermostat command)", len(reqs))
+	}
+	th, _ := reqs[1].Items[0]["Thermo"].(map[string]any)
+	if th["TempSetpoint"] != 23.0 || th["State"] != 1.0 || th["Mode"] != 1.0 {
+		t.Errorf("merged command = %s", reqs[1].Body)
+	}
+}
+
+// A mode change and a setpoint change from HomeKit, pending together, arrive at the GATE
+// as one command with both.
+func TestThermostat_ModeAndSetpointPendingTogetherAreOneCommand(t *testing.T) {
+	clu := allKindsClu()
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
+	thermo := clu.Therms[0].hk.Thermostat
+
+	var wg sync.WaitGroup
+	h := g.HoldNext(fakeSetPath)
+	hkWriteAsync(&wg, findC(t, clu.Lights[0].HkAccessory(), characteristic.TypeOn), true)
+	h.Wait(t)
+	hkWriteAsync(&wg, thermo.TargetHeatingCoolingState.C, characteristic.TargetHeatingCoolingStateAuto)
+	eventually(t, 2*time.Second, func() bool { return queuedIn(gs.writer, "THE0002") }, "mode change queued")
+	wg.Wait()          // the callbacks returned: their HomeKit syncs are marked
+	syncHomeKit(t, gs) // hap characteristics are not synchronised: no HomeKit write during a sync
+	hkWriteAsync(&wg, thermo.TargetTemperature.C, 23.0)
+	eventually(t, 2*time.Second, func() bool {
+		gs.writer.mu.Lock()
+		defer gs.writer.mu.Unlock()
+		e := gs.writer.index[entryKey(tCLU, "THE0002")]
+		return e != nil && e.obj.Thermo.TempSetpoint != nil && *e.obj.Thermo.TempSetpoint == 23
+	}, "setpoint change merged")
+	h.Release()
+	wg.Wait()
+	settle(t, gs)
+
+	var thermoReqs []fakeGateRequest
+	for _, r := range g.Requests(fakeSetPath) {
+		if r.Items[0]["Kind"] == "Thermo" {
+			thermoReqs = append(thermoReqs, r)
+		}
+	}
+	if len(thermoReqs) != 1 {
+		t.Fatalf("thermostat commands = %d, want 1", len(thermoReqs))
+	}
+	th, _ := thermoReqs[0].Items[0]["Thermo"].(map[string]any)
+	if th["TempSetpoint"] != 23.0 || th["State"] != 1.0 || th["Mode"] != 1.0 {
+		t.Errorf("command = %s, want setpoint 23, state 1, mode 1", thermoReqs[0].Body)
+	}
+}
+
+// A poll result arriving between a HomeKit write and the dispatch of its command does not
+// change what the command carries: the command is a snapshot taken at the write.
+func TestCommand_SnapshotUnaffectedByPollBeforeDispatch(t *testing.T) {
+	clu := allKindsClu()
+	clu.Lights = append(clu.Lights, &Light{CluObject: CluObject{Id: 5, Kind: "DOU", Name: "blocker"}})
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
+	light, thermo := clu.Lights[0], clu.Therms[0]
+
+	var wg sync.WaitGroup
+	h := g.HoldNext(fakeSetPath)
+	hkWriteAsync(&wg, findC(t, clu.Lights[1].HkAccessory(), characteristic.TypeOn), true)
+	h.Wait(t)
+	hkWriteAsync(&wg, findC(t, light.HkAccessory(), characteristic.TypeOn), true)
+	hkWriteAsync(&wg, thermo.hk.Thermostat.TargetTemperature.C, 23.0)
+	eventually(t, 2*time.Second, func() bool {
+		return queuedIn(gs.writer, "DOU0001") && queuedIn(gs.writer, "THE0002")
+	}, "both commands queued")
+
+	// Grenton changes on its own: a wall panel switches the thermostat to auto, the light
+	// is switched off. A poll returns that before the commands leave.
+	g.SetThermo(tCLU, "THE0002", 20, 21, 1, 1)
+	g.SetLight(tCLU, "DOU0001", false)
+	gs.Refresh()
+
+	h.Release()
+	wg.Wait()
+	settle(t, gs)
+	reqs := g.Requests(fakeSetPath)
+	if len(reqs) != 3 {
+		t.Fatalf("set requests = %d, want 3", len(reqs))
+	}
+	for _, r := range reqs[1:] {
+		item := r.Items[0]
+		switch item["Kind"] {
+		case "Light":
+			if l, _ := item["Light"].(map[string]any); l["State"] != true {
+				t.Errorf("light command = %s, want State true", r.Body)
+			}
+		case "Thermo":
+			th, _ := item["Thermo"].(map[string]any)
+			if th["TempSetpoint"] != 23.0 || th["State"] != 0.0 || th["Mode"] != 0.0 {
+				t.Errorf("thermostat command = %s, want setpoint 23 with state and mode as at the write (0, 0)", r.Body)
+			}
+		}
+	}
+}
+
+// The write lane GrentonSet configures merges partial thermostat commands field-wise
+// (stage 5 sends them; the merge policy is in place now).
+func TestWriteLane_MergesPartialThermostatCommands(t *testing.T) {
+	gs, g := newTestSet(t, allKindsClu())
+	h := g.HoldNext(fakeSetPath)
+	blocker := gs.writer.Submit(lightCmd("DOU0001", true))[0]
+	h.Wait(t)
+	first := gs.writer.Submit(thermoCmd(ptr(23.0), nil, nil))[0]
+	second := gs.writer.Submit(thermoCmd(nil, ptr(1), ptr(1)))[0]
+	h.Release()
+	waitResult(t, blocker)
+	if r1, r2 := waitResult(t, first), waitResult(t, second); r1.Outcome != OutcomeOK || r2.Outcome != OutcomeOK {
+		t.Errorf("outcomes %v, %v; want both acknowledged", r1.Outcome, r2.Outcome)
+	}
+	reqs := g.Requests(fakeSetPath)
+	if len(reqs) != 2 {
+		t.Fatalf("set requests = %d, want 2", len(reqs))
+	}
+	th, _ := reqs[1].Items[0]["Thermo"].(map[string]any)
+	if len(th) != 3 || th["TempSetpoint"] != 23.0 || th["State"] != 1.0 || th["Mode"] != 1.0 {
+		t.Errorf("thermostat item = %s, want setpoint 23, state 1, mode 1", reqs[1].Body)
+	}
+}
+
+// A command is a snapshot: changing the device's fields after the write (as a poll result
+// or a later callback would) changes neither the queued nor the sent command.
+func TestCommand_SnapshotIndependentOfDeviceFields(t *testing.T) {
+	clu := allKindsClu()
+	clu.Lights = append(clu.Lights, &Light{CluObject: CluObject{Id: 5, Kind: "DOU", Name: "blocker"}})
+	gs, g := newTestSet(t, clu)
+	gs.Refresh()
+	settle(t, gs)
+	light, thermo := clu.Lights[0], clu.Therms[0]
+
+	h := g.HoldNext(fakeSetPath)
+	blocker := gs.writer.Submit(lightCmd("DOU0005", true))[0]
+	h.Wait(t)
+	light.Set(true)
+	thermo.SetTemperature(23)
+
+	light.mu.Lock()
+	light.State = false
+	light.mu.Unlock()
+	thermo.mu.Lock()
+	thermo.TempSetpoint, thermo.State, thermo.Mode = 99, 1, 1
+	thermo.mu.Unlock()
+
+	gs.writer.mu.Lock()
+	ql := gs.writer.index[entryKey(tCLU, "DOU0001")].obj
+	qt := gs.writer.index[entryKey(tCLU, "THE0002")].obj
+	gs.writer.mu.Unlock()
+	if *ql.Light.State != true {
+		t.Error("queued light command follows the device field")
+	}
+	if *qt.Thermo.TempSetpoint != 23 || *qt.Thermo.State != 0 || *qt.Thermo.Mode != 0 {
+		t.Errorf("queued thermostat command follows the device fields: %+v", qt.Thermo)
+	}
+
+	h.Release()
+	waitResult(t, blocker)
+	settle(t, gs)
+	reqs := g.Requests(fakeSetPath)
+	if len(reqs) != 3 {
+		t.Fatalf("set requests = %d, want 3", len(reqs))
+	}
+	if l, _ := reqs[1].Items[0]["Light"].(map[string]any); l["State"] != true {
+		t.Errorf("sent light command = %s, want State true", reqs[1].Body)
+	}
+	if th, _ := reqs[2].Items[0]["Thermo"].(map[string]any); th["TempSetpoint"] != 23.0 || th["State"] != 0.0 || th["Mode"] != 0.0 {
+		t.Errorf("sent thermostat command = %s, want setpoint 23, state 0, mode 0", reqs[2].Body)
+	}
+}

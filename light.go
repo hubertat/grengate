@@ -37,19 +37,19 @@ func (gl *Light) validateHkType() error {
 		gl.Name, gl.Kind, gl.Id, gl.HkType, HkTypeLightbulb, HkTypeOutlet)
 }
 
-func (gl *Light) LoadReqObject(obj ReqObject) error {
-	if obj.Kind != "Light" {
-		return fmt.Errorf("Light LoadReqObject: wrong object kind (%s)", obj.Kind)
+func (gl *Light) applyRead(obj ReqObject, sentGen, _ uint64) (ApplyOutcome, error) {
+	p, err := validLight(obj)
+	if err != nil {
+		return ApplyInvalid, err
 	}
-
-	if obj.Light == nil {
-		return fmt.Errorf("Light LoadReqObject: missing Light object")
+	gl.mu.Lock()
+	defer gl.mu.Unlock()
+	if !gl.acceptReadLocked(sentGen) {
+		return ApplyDiscarded, nil
 	}
-
-	gl.State = obj.Light.State
-	gl.Sync()
-
-	return nil
+	changed := gl.State != *p.State
+	gl.State = *p.State
+	return gl.appliedLocked(changed), nil
 }
 
 func (gl *Light) InitAll() {
@@ -57,8 +57,6 @@ func (gl *Light) InitAll() {
 		Kind: "Light",
 		Clu:  gl.clu.Id,
 		Id:   gl.GetMixedId(),
-
-		// Light: gl,
 	}
 	gl.AppendHk()
 }
@@ -82,7 +80,10 @@ func (gl *Light) AppendHk() *accessory.A {
 	}
 
 	gl.hkA.Id = gl.GetLongId()
+	// A light write needs no baseline: it always goes through. OnValueRemoteUpdate runs
+	// after hap stored the value, so nothing the command triggers can race with that store.
 	gl.hkOn.OnValueRemoteUpdate(gl.Set)
+	gl.guardReads(gl.hkA)
 
 	gl.clu.set.Logf("HK %s added (id: %x, type: %d)", gl.hkTypeName(), gl.hkA.Id, gl.hkA.Type)
 	return gl.hkA
@@ -101,37 +102,29 @@ func (gl *Light) hkTypeName() string {
 }
 
 func (gl *Light) Sync() {
-	gl.hkOn.SetValue(gl.State)
+	gl.syncMu.Lock()
+	defer gl.syncMu.Unlock()
+	gl.mu.Lock()
+	state := gl.State
+	gl.mu.Unlock()
+
+	gl.hkOn.SetValue(state)
 	if gl.hkInUse != nil {
 		// Grenton has no power sensing, so "in use" mirrors the on/off state.
-		gl.hkInUse.SetValue(gl.State)
+		gl.hkInUse.SetValue(state)
 	}
 }
 
-func (gl *Light) Get() bool {
-
-	// if gl.clu.set.CheckFreshness() {
-	// 	return gl.State
-	// }
-
-	err := gl.Update()
-	if err != nil {
-		gl.clu.set.Error(err)
-	}
-
-	return gl.State
-
-}
-
+// Set is the HomeKit write of On (rule 1): the optimistic state and the command snapshot
+// are set and submitted under the device lock, and Set returns without waiting for the
+// GATE. A light needs no baseline, so the write goes through whether it is ready or not.
+// The write lane's completion hook handles the result.
 func (gl *Light) Set(state bool) {
-
+	gl.mu.Lock()
 	gl.State = state
-
 	req := gl.Req
-	req.Light = gl
-	_, err := gl.SendReq(req)
-
-	if err != nil {
-		gl.clu.set.Error(err)
-	}
+	req.Light = &LightPayload{State: ptr(state)}
+	gl.submitCommandLocked(req)
+	gl.mu.Unlock()
+	gl.clu.set.hkSync.mark(gl) // see hkSyncer: a sync in progress may have overwritten the write
 }
