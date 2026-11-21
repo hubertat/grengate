@@ -155,11 +155,30 @@ func describeDevice(d device) string {
 // autotest and one refresh. It returns once the startup refresh is complete, whatever its
 // outcome (the request timeout bounds how long that takes), and HomeKit shows its result.
 // The refresh cycle starts separately (startCycling), once the HomeKit server exists.
-func (gs *GrentonSet) startup(ctx context.Context, autotest bool) {
+//
+// ctx is the process lifecycle (SIGTERM). If it ends during startup, the workers are
+// stopped (Stop): the lanes abort the request in flight and resolve everything still
+// queued without sending it, so the autotest and the refresh return at once, and startup
+// returns ctx.Err(). The caller must not go on to start HomeKit then.
+func (gs *GrentonSet) startup(ctx context.Context, autotest bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stopOnCancel := context.AfterFunc(ctx, gs.Stop)
+	defer stopOnCancel()
+
 	if autotest {
 		gs.Autotest()
+		if err := ctx.Err(); err != nil {
+			gs.Logf("startup cancelled during the autotest: %v", err)
+			return err
+		}
 	}
 	c := gs.Refresh()
+	if err := ctx.Err(); err != nil {
+		gs.Logf("startup cancelled during the startup refresh: %v", err)
+		return err
+	}
 	// The shutter simulations take what the refresh observed; then no HomeKit controller is
 	// connected before the server starts, so the syncer cannot be blocked by one: HomeKit
 	// starts with the state just read.
@@ -169,6 +188,7 @@ func (gs *GrentonSet) startup(ctx context.Context, autotest bool) {
 	<-gs.hkSync.flushed()
 	gs.Logf("startup refresh: %d of %d devices read (%d missing or invalid, %d failed) in %d ms",
 		c.Applied, c.Objects, c.Missing, c.Failed, c.Duration.Milliseconds())
+	return nil
 }
 
 // startCycling starts the refresh scheduler until ctx ends. Cycle boundaries count from

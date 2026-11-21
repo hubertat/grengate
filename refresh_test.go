@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -179,5 +180,53 @@ func TestStartup_RefreshesBeforeReturning(t *testing.T) {
 	gs.startup(ctx, false)
 	if v := findC(t, clu.Lights[1].HkAccessory(), characteristic.TypeOn).Val; v != true {
 		t.Errorf("On = %v after startup, want the state read from the GATE", v)
+	}
+}
+
+// A cancelled lifecycle context (SIGTERM during startup) stops startup promptly: the
+// request in flight is aborted instead of running into the request timeout, and the
+// requests still queued are not sent.
+func TestStartup_CancelStopsPromptly(t *testing.T) {
+	for _, autotest := range []bool{false, true} {
+		t.Run(fmt.Sprintf("autotest=%v", autotest), func(t *testing.T) {
+			gs, g := newTestSetWith(t, func(gs *GrentonSet) {
+				gs.QueryLimit = 2
+				gs.requestTimeout = 10 * time.Second
+			}, lightsClu(5))
+			g.HangAll("")
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			done := make(chan error, 1)
+			go func() { done <- gs.startup(ctx, autotest) }()
+			g.WaitForRequests(t, fakeReadPath, 1)
+			cancel()
+
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Errorf("startup returned %v, want context.Canceled", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("startup did not return after its context was cancelled")
+			}
+			if n := g.RequestCount(fakeReadPath); n != 1 {
+				t.Errorf("read requests = %d, want only the one in flight at cancellation", n)
+			}
+			stopped := make(chan struct{})
+			go func() { gs.Stop(); close(stopped) }()
+			select {
+			case <-stopped:
+			case <-time.After(2 * time.Second):
+				t.Fatal("Stop did not return after a cancelled startup")
+			}
+		})
+	}
+}
+
+func TestStartup_ReturnsNilWhenNotCancelled(t *testing.T) {
+	gs, _ := newTestSet(t, lightsClu(2))
+	if err := gs.startup(context.Background(), false); err != nil {
+		t.Errorf("startup = %v, want nil", err)
 	}
 }

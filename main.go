@@ -55,7 +55,10 @@ func main() {
 
 	// Autotest and startup refresh: HomeKit starts only after the startup refresh has an
 	// outcome for every device.
-	gren.startup(ctx, gren.PerformAutotest || *performAutotest)
+	if err := gren.startup(ctx, gren.PerformAutotest || *performAutotest); err != nil {
+		log.Printf("grengate exiting during startup: %v", err)
+		return
+	}
 
 	log.Print("HomeKit init")
 

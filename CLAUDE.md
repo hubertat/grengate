@@ -113,7 +113,7 @@ Configuration is JSON-based. See `config.json.example` for structure:
 2. The read lane POSTs arrays of up to `QueryLimit` items to `ReadPath`
 3. The send hook (`readSent`) records each device's generation in the entry; the completion hook (`readCompleted`) finds the device in the registry and `applyRead` validates the item and applies it only if the generation is unchanged and no command is pending (rule 4; otherwise `ApplyDiscarded`); the HomeKit syncer (`hk_sync.go`) pushes applied state to HomeKit
 4. Refresh counts applied/changed/discarded/missing-or-invalid/failed (adding up to `Objects`, the devices queued) and skipped (not due, not part of `Objects`) and reports a metrics event
-5. One refresh runs at startup before the HomeKit server (`startup()`); after `hap.NewServer`, `startCycling()` starts `refreshScheduler` (`scheduler.go`), which runs one refresh per cycle boundary, skipping boundaries that pass during a refresh
+5. One refresh runs at startup before the HomeKit server (`startup()`; if the lifecycle context ends meanwhile, e.g. SIGTERM, it calls `Stop()`, which aborts the request in flight and resolves the queued ones, and returns `ctx.Err()` so `main` exits instead of starting HomeKit); after `hap.NewServer`, `startCycling()` starts `refreshScheduler` (`scheduler.go`), which runs one refresh per cycle boundary, skipping boundaries that pass during a refresh
 
 **Writing State:**
 1. hap calls the characteristic's `SetValueRequestFunc` (shutter, and thermostat in the legacy protocol: `writeGuard` refuses while not ready), stores the value, then the `OnValueRemoteUpdate` callback (e.g., `Light.Set()`)
