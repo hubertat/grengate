@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/brutella/hap/accessory"
 )
@@ -18,8 +17,7 @@ type Clu struct {
 	Shutters      []*Shutter
 	MotionSensors []*MotionSensor
 
-	set   *GrentonSet
-	block sync.Mutex
+	set *GrentonSet
 }
 
 func (gc *Clu) GetIntId() uint32 {
@@ -64,7 +62,7 @@ func (gc *Clu) GetAllHkAcc() (slc []*accessory.A) {
 	slc = []*accessory.A{}
 
 	for _, light := range gc.Lights {
-		slc = append(slc, light.hk.A)
+		slc = append(slc, light.HkAccessory())
 	}
 
 	for _, thermo := range gc.Therms {

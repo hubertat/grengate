@@ -2,22 +2,16 @@ package main
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/brutella/hap/accessory"
 	"github.com/brutella/hap/characteristic"
 	"github.com/brutella/hap/service"
 )
 
-const clearMotionEventDuration = 15 * time.Second
-
 type MotionSensor struct {
 	CluObject
 
 	State bool
-
-	clearTimer      *time.Timer
-	resetClearTimer chan bool
 
 	hkAccessory *accessory.A
 	hkService   *service.MotionSensor
@@ -56,47 +50,47 @@ func (ms *MotionSensor) appendHk() *accessory.A {
 	ms.hkService.AddC(ms.hkFault.C)
 	ms.hkAccessory.AddS(ms.hkService.S)
 	ms.hkService.MotionDetected.SetValue(false)
+	ms.guardReads(ms.hkAccessory)
 
 	ms.clu.set.Logf("HK MotionSensor added (id: %x)", ms.hkAccessory.Id)
 
 	return ms.hkAccessory
 }
 
+// Set applies a pushed state (input server) under rule 3 of concept 3.3: it bumps the
+// generation, so a poll result from a read sent before the push is discarded. A push
+// carries the sensor's whole state, so the sensor is ready from then on. HomeKit is
+// updated through the syncer.
 func (ms *MotionSensor) Set(state bool) {
+	ms.mu.Lock()
 	ms.State = state
+	ms.gen++
+	ms.ready = true
+	ms.mu.Unlock()
+	ms.clu.set.hkSync.mark(ms)
+}
+
+// Sync pushes the state to HomeKit.
+func (ms *MotionSensor) Sync() {
+	ms.syncMu.Lock()
+	defer ms.syncMu.Unlock()
+	ms.mu.Lock()
+	state := ms.State
+	ms.mu.Unlock()
 	ms.hkService.MotionDetected.SetValue(state)
 }
 
-func (ms *MotionSensor) SetOn() {
-	ms.Set(true)
-	ms.clearTimer = time.NewTimer(clearMotionEventDuration)
-	go func() {
-		for {
-			select {
-			case <-ms.clearTimer.C:
-				ms.Set(false)
-				return
-			case <-ms.resetClearTimer:
-				ms.clearTimer.Stop()
-				return
-			}
-		}
-	}()
-}
-
-// LoadReqObject checks object received from http request end reads it into MotionSensor
-func (ms *MotionSensor) LoadReqObject(obj ReqObject) error {
-	if obj.Kind != "MotionSensor" {
-		return fmt.Errorf("MotionSensor LoadReqObject: wrong object kind (%s)", obj.Kind)
+func (ms *MotionSensor) applyRead(obj ReqObject, sentGen, _ uint64) (ApplyOutcome, error) {
+	p, err := validMotion(obj)
+	if err != nil {
+		return ApplyInvalid, err
 	}
-
-	if obj.MotionSensor == nil {
-		return fmt.Errorf("MotionSensor LoadReqObject: missing MotionSensor object")
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	if !ms.acceptReadLocked(sentGen) {
+		return ApplyDiscarded, nil
 	}
-
-	ms.clu.set.Debugf("MotionSensor LoadReqObject loading: \n%+v", obj)
-
-	ms.Set(obj.MotionSensor.State)
-
-	return nil
+	changed := ms.State != *p.State
+	ms.State = *p.State
+	return ms.appliedLocked(changed), nil
 }
