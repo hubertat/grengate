@@ -1,7 +1,7 @@
 -- Update (write) script, GATE HTTP object "homebridge".
 -- Contract: the response has the shape of the request (see README.md).
---   object in -> acknowledgement object out
---   array in  -> array out, one acknowledgement per item, same order, no holes
+-- Single-object requests return a single acknowledgement object.
+-- Array requests return an array, one acknowledgement per item, same order, no holes.
 -- An acknowledgement is {Clu, Id, Kind} plus Error (string) when the item failed, and
 -- Uncertain = true when it failed after the GATE had called the CLU for it (the CLU may
 -- have acted, e.g. execute() timed out after the CLU ran it, or a thermostat's setpoint was
